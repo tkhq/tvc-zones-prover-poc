@@ -1,0 +1,31 @@
+[package]
+name = "helloworld"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+axum = { workspace = true, features = ["http1", "tokio", "json", "macros"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower-http = { workspace = true }
+reqwest = { workspace = true }
+metrics = { path = "../metrics" }
+qos_core = { workspace = true }
+qos_hex = { workspace = true, features = ["serde"] }
+qos_json = { workspace = true }
+rand = "0.9.1"
+serde = { version = "1.0", features = ["derive"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }
+qos_p256 = { workspace = true }
+tempfile = { workspace = true }

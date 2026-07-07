@@ -1,11 +1,13 @@
-//! Hello World REST server binary.
+//! Zone prover REST server binary.
 
 use clap::Parser;
 use helloworld::cli::Cli;
 use helloworld::router::{self, AppState};
 use metrics::MetricsLayer;
+use qos_nsm::Nsm;
 use qos_p256::P256Pair;
 use std::io;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -25,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| io::Error::other(format!("failed to load ephemeral key: {e:?}")))?;
     let quorum_key = P256Pair::from_hex_file(cli.quorum_file)
         .map_err(|e| io::Error::other(format!("failed to load quorum key: {e:?}")))?;
-    let app_state = AppState::new(ephemeral_key, quorum_key);
+    let app_state = AppState::new(ephemeral_key, quorum_key, Arc::new(Nsm), &cli.manifest_file);
     let app = router::router_with_state(app_state)
         .layer(metrics_layer)
         .route("/metrics", metrics::handler(collector));

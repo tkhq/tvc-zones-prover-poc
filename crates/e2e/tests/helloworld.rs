@@ -20,12 +20,33 @@ async fn test_health() {
 }
 
 #[tokio::test]
-async fn test_prove_zone_batch() {
+async fn test_prove_zone_batch_errors_outside_enclave() {
     async fn test(test_args: TestArgs) {
         let client = reqwest::Client::new();
         let witness = qos_hex::encode(b"e2e witness");
         let resp = client
             .post(format!("{}/prove_zone_batch", test_args.base_url))
+            .json(&serde_json::json!({ "witness": witness }))
+            .send()
+            .await
+            .unwrap();
+        // The real endpoint needs the NSM and QOS manifest, which only exist
+        // inside an enclave.
+        assert_eq!(resp.status(), 500);
+    }
+    e2e::Builder::new().execute(test).await;
+}
+
+#[tokio::test]
+async fn test_mock_attestation_prove_zone_batch() {
+    async fn test(test_args: TestArgs) {
+        let client = reqwest::Client::new();
+        let witness = qos_hex::encode(b"e2e witness");
+        let resp = client
+            .post(format!(
+                "{}/mock_attestation/prove_zone_batch",
+                test_args.base_url
+            ))
             .json(&serde_json::json!({ "witness": witness }))
             .send()
             .await

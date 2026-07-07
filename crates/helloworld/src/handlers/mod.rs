@@ -4,4 +4,4 @@ mod basic;
 mod prove;
 
 pub(crate) use basic::health;
-pub(crate) use prove::prove_zone_batch;
+pub(crate) use prove::{mock_attestation_prove_zone_batch, prove_zone_batch};

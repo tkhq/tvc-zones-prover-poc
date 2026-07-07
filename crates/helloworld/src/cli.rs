@@ -20,4 +20,8 @@ pub struct Cli {
     /// Path to the ephemeral key file used for app proofs
     #[arg(long, default_value = qos_core::EPHEMERAL_KEY_FILE)]
     pub ephemeral_file: String,
+
+    /// Path to the QOS manifest file
+    #[arg(long, default_value = qos_core::MANIFEST_FILE)]
+    pub manifest_file: String,
 }

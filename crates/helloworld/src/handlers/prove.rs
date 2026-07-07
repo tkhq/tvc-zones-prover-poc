@@ -1,9 +1,9 @@
 use crate::{response::AppError, state::AppState, zone_prover};
 use axum::{Json, extract::State};
+use qos_nsm::types::{NsmRequest, NsmResponse};
 use serde::{Deserialize, Serialize};
 
-// Placeholder values until the app runs inside an enclave and can request a
-// real NSM attestation document and read the QOS manifest.
+// Placeholder values returned by the mock attestation endpoint.
 const STUB_ATTESTATION_DOC: &[u8] = b"stub-attestation-doc";
 const STUB_MANIFEST: &[u8] = b"stub-manifest";
 
@@ -31,18 +31,22 @@ pub(crate) struct ProveZoneBatchResponse {
     /// The ephemeral signing public key.
     #[serde(with = "qos_hex::serde")]
     ephemeral_public_key: Vec<u8>,
-    /// NSM attestation document (stub).
+    /// COSE Sign1 NSM attestation document with the batch output in
+    /// `user_data` and the ephemeral public key in `public_key`.
     #[serde(with = "qos_hex::serde")]
     attestation_doc: Vec<u8>,
-    /// QOS manifest (stub).
+    /// Borsh encoded QOS manifest envelope.
     #[serde(with = "qos_hex::serde")]
     manifest: Vec<u8>,
 }
 
-pub(crate) async fn prove_zone_batch(
-    State(state): State<AppState>,
-    Json(request): Json<ProveZoneBatchRequest>,
-) -> Result<Json<ProveZoneBatchResponse>, AppError> {
+/// Run the stub prover over the request's witness and sign the batch output
+/// with both keys. Returns a response with the attestation doc and manifest
+/// left empty for the caller to fill in.
+fn prove_and_sign(
+    state: &AppState,
+    request: &ProveZoneBatchRequest,
+) -> Result<ProveZoneBatchResponse, AppError> {
     let witness = qos_hex::decode(&request.witness)
         .map_err(|e| AppError::bad_request(format!("invalid witness hex: {e:?}")))?;
 
@@ -57,13 +61,57 @@ pub(crate) async fn prove_zone_batch(
         .sign(&batch_output)
         .map_err(|e| AppError::internal(format!("failed to sign with ephemeral key: {e:?}")))?;
 
-    Ok(Json(ProveZoneBatchResponse {
+    Ok(ProveZoneBatchResponse {
         batch_output,
         quorum_key_signature,
         quorum_public_key: state.quorum_key.public_key().to_bytes(),
         ephemeral_key_signature,
         ephemeral_public_key: state.ephemeral_key.public_key().to_bytes(),
-        attestation_doc: STUB_ATTESTATION_DOC.to_vec(),
-        manifest: STUB_MANIFEST.to_vec(),
-    }))
+        attestation_doc: Vec::new(),
+        manifest: Vec::new(),
+    })
+}
+
+/// Prove a zone batch with a real NSM attestation doc committing to the batch
+/// output in `user_data`, plus the QOS manifest read from disk.
+pub(crate) async fn prove_zone_batch(
+    State(state): State<AppState>,
+    Json(request): Json<ProveZoneBatchRequest>,
+) -> Result<Json<ProveZoneBatchResponse>, AppError> {
+    let mut response = prove_and_sign(&state, &request)?;
+
+    let nsm_response = state.nsm.nsm_process_request(NsmRequest::Attestation {
+        user_data: Some(response.batch_output.clone()),
+        nonce: None,
+        public_key: Some(response.ephemeral_public_key.clone()),
+    });
+    let NsmResponse::Attestation { document } = nsm_response else {
+        return Err(AppError::internal(format!(
+            "unexpected NSM response: {nsm_response:?}"
+        )));
+    };
+    response.attestation_doc = document;
+
+    response.manifest = std::fs::read(&*state.manifest_file).map_err(|e| {
+        AppError::internal(format!(
+            "failed to read manifest file {}: {e}",
+            state.manifest_file
+        ))
+    })?;
+
+    Ok(Json(response))
+}
+
+/// Prove a zone batch with stub attestation doc and manifest values. Useful
+/// for exercising the flow outside of an enclave, where the NSM and QOS
+/// manifest are not available.
+pub(crate) async fn mock_attestation_prove_zone_batch(
+    State(state): State<AppState>,
+    Json(request): Json<ProveZoneBatchRequest>,
+) -> Result<Json<ProveZoneBatchResponse>, AppError> {
+    let mut response = prove_and_sign(&state, &request)?;
+    response.attestation_doc = STUB_ATTESTATION_DOC.to_vec();
+    response.manifest = STUB_MANIFEST.to_vec();
+
+    Ok(Json(response))
 }

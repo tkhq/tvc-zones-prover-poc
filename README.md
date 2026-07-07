@@ -10,38 +10,11 @@ This is a minimal REST server that demonstrates the structure and patterns for r
 $ curl localhost:44020/health
 {"status":"healthy"}
 
-$ curl localhost:44020/hello_world
-{"message":"hello world"}
-
-$ curl localhost:44020/time
-{"time":1741048558}
-
-$ curl localhost:44020/random_app_proof
-{"random_number":"12345","proof":{"public_key":"...","payload":"{\"random_number\":\"12345\"}","signature":"..."}}
-
-$ curl -X POST \
-  -H 'content-type: application/json' \
-  -d '{"plaintext":"hello TVC world"}' \
-  localhost:44020/quorum_key/encrypt
-{"ciphertext":"..."}
-
-$ curl -X POST \
-  -H 'content-type: application/json' \
-  -d '{"ciphertext":"..."}' \
-  localhost:44020/quorum_key/decrypt
-{"plaintext":"hello TVC world"}
-
 $ curl -X POST \
   -H 'content-type: application/json' \
   -d '{"witness":"deadbeef"}' \
   localhost:44020/prove_zone_batch
 {"batch_output":"...","quorum_key_signature":"...","quorum_public_key":"...","ephemeral_key_signature":"...","ephemeral_public_key":"...","attestation_doc":"...","manifest":"..."}
-
-$ curl -X POST -d 'hello' localhost:44020/echo
-hello
-
-$ curl localhost:44020/btc_price
-{"bitcoin_usd":64225.0}
 
 $ curl localhost:44020/metrics
 # HELP tvc_http_request_duration_ms HTTP request duration in milliseconds

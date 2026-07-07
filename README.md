@@ -31,6 +31,12 @@ $ curl -X POST \
   localhost:44020/quorum_key/decrypt
 {"plaintext":"hello TVC world"}
 
+$ curl -X POST \
+  -H 'content-type: application/json' \
+  -d '{"witness":"deadbeef"}' \
+  localhost:44020/prove_zone_batch
+{"batch_output":"...","quorum_key_signature":"...","quorum_public_key":"...","ephemeral_key_signature":"...","ephemeral_public_key":"...","attestation_doc":"...","manifest":"..."}
+
 $ curl -X POST -d 'hello' localhost:44020/echo
 hello
 

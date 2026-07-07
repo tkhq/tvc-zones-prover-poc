@@ -113,6 +113,41 @@ async fn test_quorum_key_encrypt_decrypt() {
 }
 
 #[tokio::test]
+async fn test_prove_zone_batch() {
+    async fn test(test_args: TestArgs) {
+        let client = reqwest::Client::new();
+        let witness = qos_hex::encode(b"e2e witness");
+        let resp = client
+            .post(format!("{}/prove_zone_batch", test_args.base_url))
+            .json(&serde_json::json!({ "witness": witness }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let json: serde_json::Value = resp.json().await.unwrap();
+
+        let hex_field = |field: &str| qos_hex::decode(json[field].as_str().unwrap()).unwrap();
+
+        let batch_output = hex_field("batch_output");
+        assert!(batch_output.ends_with(b"e2e witness"));
+
+        for (public_key_field, signature_field) in [
+            ("quorum_public_key", "quorum_key_signature"),
+            ("ephemeral_public_key", "ephemeral_key_signature"),
+        ] {
+            let public_key = P256Public::from_bytes(&hex_field(public_key_field)).unwrap();
+            public_key
+                .verify(&batch_output, &hex_field(signature_field))
+                .unwrap();
+        }
+
+        assert!(!hex_field("attestation_doc").is_empty());
+        assert!(!hex_field("manifest").is_empty());
+    }
+    e2e::Builder::new().execute(test).await;
+}
+
+#[tokio::test]
 async fn test_echo() {
     async fn test(test_args: TestArgs) {
         let client = reqwest::Client::new();

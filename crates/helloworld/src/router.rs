@@ -1,7 +1,7 @@
 //! Router for the Hello World REST server
 use crate::handlers::{
-    btc_price, echo, health, hello_world, quorum_key_decrypt, quorum_key_encrypt, random_app_proof,
-    time,
+    btc_price, echo, health, hello_world, prove_zone_batch, quorum_key_decrypt, quorum_key_encrypt,
+    random_app_proof, time,
 };
 use axum::{
     Router,
@@ -23,6 +23,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/random_app_proof", get(random_app_proof))
         .route("/quorum_key/encrypt", post(quorum_key_encrypt))
         .route("/quorum_key/decrypt", post(quorum_key_decrypt))
+        .route("/prove_zone_batch", post(prove_zone_batch))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -273,6 +274,71 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&body).expect("response is not valid JSON");
         assert_eq!(json["plaintext"], plaintext);
+    }
+
+    #[tokio::test]
+    async fn prove_zone_batch_returns_verifiable_signatures() {
+        let app = router_with_generated_keys();
+        let witness = qos_hex::encode(b"test witness");
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/prove_zone_batch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"witness":"{witness}"}}"#)))
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to execute request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response.into_body()).await;
+        let json: serde_json::Value =
+            serde_json::from_str(&body).expect("response is not valid JSON");
+
+        let hex_field = |field: &str| {
+            qos_hex::decode(json[field].as_str().expect("field should be a string"))
+                .expect("field should hex decode")
+        };
+
+        let batch_output = hex_field("batch_output");
+        assert!(
+            batch_output.ends_with(b"test witness"),
+            "batch output should be derived from the witness"
+        );
+
+        for (public_key_field, signature_field) in [
+            ("quorum_public_key", "quorum_key_signature"),
+            ("ephemeral_public_key", "ephemeral_key_signature"),
+        ] {
+            let public_key = P256Public::from_bytes(&hex_field(public_key_field))
+                .expect("public key should decode");
+            public_key
+                .verify(&batch_output, &hex_field(signature_field))
+                .expect("signature should verify over the batch output");
+        }
+
+        assert!(!hex_field("attestation_doc").is_empty());
+        assert!(!hex_field("manifest").is_empty());
+    }
+
+    #[tokio::test]
+    async fn prove_zone_batch_rejects_malformed_witness_hex() {
+        let app = router_with_generated_keys();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/prove_zone_batch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"witness":"not-hex"}"#))
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to execute request");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -1,8 +1,6 @@
-# TVC App Template
+# TVC Zones Prover PoC
 
-A starter template for building [Turnkey Verifiable Cloud (TVC)](https://docs.turnkey.com) enclave applications.
-
-This is a minimal REST server that demonstrates the structure and patterns for running an application inside a TVC enclave.
+A proof of concept for running `prove_zone_batch` inside a [Turnkey Verifiable Cloud (TVC)](https://docs.turnkey.com) enclave. The prover is currently a stub: the endpoint runs a placeholder prover over the submitted witness and returns the batch output signed by the quorum and ephemeral keys, plus stub attestation doc and manifest values.
 
 ## Endpoints
 
@@ -17,55 +15,5 @@ $ curl -X POST \
 {"batch_output":"...","quorum_key_signature":"...","quorum_public_key":"...","ephemeral_key_signature":"...","ephemeral_public_key":"...","attestation_doc":"...","manifest":"..."}
 
 $ curl localhost:44020/metrics
-# HELP tvc_http_request_duration_ms HTTP request duration in milliseconds
-# TYPE tvc_http_request_duration_ms histogram
-tvc_http_request_duration_ms_bucket{method="GET",path="/health",status="200",le="1"} 1
-...
-```
-
-## Development
-
-### Run tests
-
-```
-make test
-```
-
-### Run locally
-
-```
-make run
-```
-
-Server starts on http://127.0.0.1:44020
-
-## Building OCI containers
-
-This repository uses [StageX](https://stagex.tools) to build OCI containers. Requires Docker >= 26 with containerd:
-
-- **Docker Desktop:** Dashboard > Settings > "Use containerd for pulling and storing images"
-- **Linux:** add to `/etc/docker/daemon.json`:
-  ```json
-  {
-    "features": {
-      "containerd-snapshotter": true
-    }
-  }
-  ```
-
-Build the container:
-
-```sh
-make out/helloworld/index.json
-```
-
-## Project Structure
-
-```
-crates/
-  helloworld/     # REST server binary
-  metrics/        # Prometheus metrics Tower middleware
-  e2e/            # End-to-end tests
-images/
-  helloworld/     # Containerfile for OCI image
+# Prometheus metrics
 ```

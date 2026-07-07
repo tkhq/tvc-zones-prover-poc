@@ -2,6 +2,8 @@
 
 A proof of concept for running `prove_zone_batch` inside a [Turnkey Verifiable Cloud (TVC)](https://docs.turnkey.com) enclave. The prover is currently a stub: the endpoint runs a placeholder prover over the submitted witness and returns the batch output signed by the quorum and ephemeral keys, plus stub attestation doc and manifest values.
 
+Based on [tkhq/tvc-template](https://github.com/tkhq/tvc-template).
+
 ## Endpoints
 
 ```sh

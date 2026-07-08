@@ -2,7 +2,10 @@
 members = [
   "crates/e2e",
   "crates/metrics",
-  "crates/helloworld",
+  "crates/tempo_zone_stubs",
+  "crates/tvc_utils",
+  "crates/tvc_zones_cli",
+  "crates/zones_prover",
 ]
 
 resolver = "3"
@@ -11,7 +14,7 @@ resolver = "3"
 edition = "2024"
 version = "0.2.0"
 publish = false
-rust-version = "1.94"
+rust-version = "1.95"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
@@ -23,7 +26,18 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+alloy-primitives = { version = "1", default-features = false, features = ["std", "serde", "map"] }
+aws-nitro-enclaves-cose = { version = "0.5", default-features = false }
+aws-nitro-enclaves-nsm-api = { version = "0.4", default-features = false }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+serde_bytes = { version = "0.11", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false }
+tempo-zone-stubs = { path = "crates/tempo_zone_stubs" }
+tvc_utils = { path = "crates/tvc_utils" }
+zones_prover = { path = "crates/zones_prover" }
+zone-primitives = { git = "https://github.com/tempoxyz/zones", rev = "0bb2b9fc1711cd9bb2445b9c2a2b07f4e7d60aa6", default-features = false, features = ["std", "serde"] }
 assert_cmd = "2.0"
+thiserror = "2"
 axum = { version = "0.8.8", default-features = false }
 serde_json = "1.0.142"
 tokio = { version = "1.47", default-features = false }
@@ -36,8 +50,8 @@ pin-project-lite = "0.2"
 prometheus = { version = "0.13", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tempfile = "3.23"
-qos_core = { version = "0.10.0", default-features = false }
-qos_hex = { version = "0.10.0", default-features = false }
-qos_nsm = { version = "0.10.0", default-features = false }
-qos_json = { version = "0.10.0", default-features = false }
-qos_p256 = { version = "0.10.0", default-features = false }
+qos_core = { version = "0.12.0", default-features = false }
+qos_hex = { version = "0.12.0", default-features = false }
+qos_nsm = { version = "0.12.0", default-features = false }
+qos_json = { version = "0.12.0", default-features = false }
+qos_p256 = { version = "0.12.0", default-features = false }

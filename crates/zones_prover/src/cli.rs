@@ -1,16 +1,16 @@
-//! CLI argument parsing for the Hello World server
+//! CLI argument parsing for the Zones prover server
 use clap::Parser;
 
-/// Hello World REST server
+/// Zones prover REST server
 #[derive(Parser, Debug)]
-#[command(name = "helloworld", version, about = "Hello World REST server")]
+#[command(name = "zones_prover", version, about = "Zones prover REST server")]
 pub struct Cli {
     /// IP address to listen on
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
     /// Port to listen on
-    #[arg(long, default_value = "44020")]
+    #[arg(long, default_value = "3000")]
     pub port: u16,
 
     /// Path to the quorum key file
@@ -21,7 +21,13 @@ pub struct Cli {
     #[arg(long, default_value = qos_core::EPHEMERAL_KEY_FILE)]
     pub ephemeral_file: String,
 
-    /// Path to the QOS manifest file
+    /// Path to the QOS manifest file. Override for local testing.
     #[arg(long, default_value = qos_core::MANIFEST_FILE)]
     pub manifest_file: String,
+
+    /// Use a mock NSM that builds structurally real attestation documents
+    /// instead of the real Nitro Secure Module. For local testing outside
+    /// an enclave.
+    #[arg(long)]
+    pub mock_nsm: bool,
 }

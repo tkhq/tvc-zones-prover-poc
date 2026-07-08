@@ -1,0 +1,25 @@
+[package]
+name = "tempo-zone-stubs"
+description = "All functions and types we expect to import directly from the tempo repo; spec-mirrored batch types are staged here until tempo publishes them"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+alloy-primitives = { workspace = true }
+qos_json = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = { workspace = true }
+zone-primitives = { workspace = true }
+
+[features]
+# PoC-local test fixtures (fake witness data); not part of the tempo
+# type universe.
+fixtures = []
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }

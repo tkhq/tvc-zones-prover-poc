@@ -209,8 +209,7 @@ mod tests {
         );
 
         // Fresh attestation doc: manifest hash in user_data (QOS
-        // convention), ephemeral public key in public_key, live manifest
-        // commitment in PCR17.
+        // convention), live manifest commitment in PCR17.
         let doc = unsafe_attestation_doc_from_der(&hex_field("attestation_doc"))
             .expect("attestation doc should decode");
         assert_eq!(
@@ -252,9 +251,8 @@ mod tests {
                 .expect("field should hex decode")
         };
 
-        // The attestation doc is a real COSE Sign1 document committing to
-        // sha256(batch_output) via `user_data` and to the ephemeral public
-        // key via `public_key`.
+        // The attestation doc is a real COSE Sign1 document binding
+        // sha256(batch_output) via `user_data`.
         let doc = unsafe_attestation_doc_from_der(&hex_field("attestation_doc"))
             .expect("attestation doc should decode");
         assert_eq!(

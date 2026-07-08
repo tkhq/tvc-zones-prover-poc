@@ -50,7 +50,7 @@ async fn test_enclave_identity() {
         );
 
         // Fresh identity attestation doc: manifest hash in user_data (QOS
-        // convention), ephemeral key in public_key, PCR17 commitment.
+        // convention), PCR17 commitment.
         let doc =
             qos_nsm::nitro::unsafe_attestation_doc_from_der(&hex_field("attestation_doc")).unwrap();
         assert_eq!(doc.user_data.as_ref().unwrap().as_ref(), manifest_hash);
@@ -122,9 +122,9 @@ async fn test_prove_zone_batch() {
         }
 
         // The attestation doc is a real COSE Sign1 document built by the
-        // NSM. It must commit to sha256(batch_output) via `user_data`, to
-        // the ephemeral public key via `public_key`, and to the manifest
-        // hash via the live manifest-commitment PCR.
+        // NSM. It must bind sha256(batch_output) via `user_data` and
+        // commit to the manifest hash via the live manifest-commitment
+        // PCR.
         use qos_core::protocol::services::boot::manifest::canonical_json_hash;
         use sha2::Digest as _;
         let doc =

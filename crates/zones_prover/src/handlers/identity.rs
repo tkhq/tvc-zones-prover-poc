@@ -15,20 +15,19 @@ pub struct EnclaveIdentityResponse {
     /// this key after verifying it against the attested manifest.
     #[serde(with = "qos_hex::serde")]
     pub quorum_public_key: Vec<u8>,
-    /// The per-instance ephemeral public key, bound to the enclave via the
-    /// attestation doc's `public_key` field.
+    /// The per-instance ephemeral public key, committed to in PCR17 via
+    /// the live manifest commitment.
     #[serde(with = "qos_hex::serde")]
     pub ephemeral_public_key: Vec<u8>,
     /// Fresh COSE Sign1 NSM attestation document with the canonical QOS
-    /// JSON manifest hash in `user_data` (per the QOS convention) and the
-    /// ephemeral public key in `public_key`.
+    /// JSON manifest hash in `user_data` (per the QOS convention).
     #[serde(with = "qos_hex::serde")]
     pub attestation_doc: Vec<u8>,
 }
 
 /// Return the enclave's identity: the QOS manifest, the quorum and
-/// ephemeral public keys, and a fresh NSM attestation document binding the
-/// ephemeral key and manifest hash to the enclave.
+/// ephemeral public keys, and a fresh NSM attestation document committing
+/// to the manifest hash.
 pub(crate) async fn enclave_identity(
     State(state): State<AppState>,
 ) -> Result<Json<EnclaveIdentityResponse>, AppError> {

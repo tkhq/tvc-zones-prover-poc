@@ -1,6 +1,6 @@
 # TVC Zones Prover PoC
 
-A proof of concept for running `prove_zone_batch` inside a [Turnkey Verifiable Cloud (TVC)](https://docs.turnkey.com) enclave. The request/response types match the prover input definitions from the [tempo zones spec](https://github.com/tempoxyz/zones/blob/main/specs/spec.md#witness-structure) (`BatchWitness` in, `BatchOutput` commitments out), but the proof itself is still a stub: `/prove_zone_batch` validates structural invariants of the submitted witness, derives placeholder commitments, and returns the batch output signed by the quorum and ephemeral keys, along with an NSM attestation doc committing to the output and the QOS manifest. The [`prove_zone_batch` handler](crates/zones_prover/src/handlers/prove.rs) is the heart of what happens inside the enclave: decrypt the witness with the quorum key, prove, sign the canonical QOS JSON batch output with the quorum and ephemeral keys, and attach a fresh attestation doc.
+A proof of concept for running `prove_zone_batch` inside a [Turnkey Verifiable Cloud (TVC)](https://docs.turnkey.com/features/verifiable-cloud/overview) enclave. The request/response types match the prover input definitions from the [tempo zones spec](https://github.com/tempoxyz/zones/blob/main/specs/spec.md#witness-structure) (`BatchWitness` in, `BatchOutput` commitments out), but the proof itself is still a stub: `/prove_zone_batch` returns mocked batch output signed by the quorum and ephemeral keys, along with an NSM attestation doc binding the batch output. The [`prove_zone_batch` handler](crates/zones_prover/src/handlers/prove.rs) is the heart of what happens inside the enclave: decrypt the witness with the quorum key, prove, sign the canonical QOS JSON batch output with the quorum and ephemeral keys, and attach a fresh attestation doc.
 
 Based on [tkhq/tvc-template](https://github.com/tkhq/tvc-template).
 
@@ -55,9 +55,8 @@ response, step by step:
 0. **Recompute the canonical signed bytes**: re-serialize the response's
    structured `batch_output` as canonical QOS JSON and verify the quorum
    and ephemeral signatures over those bytes.
-1. **Decode** the attestation document and check
-   `user_data == sha256(batch_output)` and that the doc's `public_key` is
-   the key that signed the batch output.
+1. **Verify the attestation binding**: decode the attestation document
+   and check `user_data == sha256(batch_output)`.
 2. **Verify the certificate chain** against the pinned AWS Nitro root
    certificate and the COSE Sign1 signature.
 3. **Print PCR0/1/2/3** for comparison against known-good release values.
@@ -67,6 +66,12 @@ response, step by step:
    quorum key and the enclave PCRs.
 6. **Print the manifest pivot hash** for comparison against a known-good
    reproducible build of the app.
+
+> **Note**: verifying the attestation binding (steps 1–5) makes the
+> step 0 signatures unnecessary. Conversely, a signature alone suffices for a
+> verifier that trusts a pinned quorum key, or that has verified once
+> that a valid attestation doc commits to the ephemeral public key via
+> the PCR17 live manifest commitment.
 
 For simplicity there are no baked-in expected values: the CLI prints the
 measured values and states what to compare them against.
@@ -86,7 +91,7 @@ $ curl localhost:3000/health
 $ curl localhost:3000/enclave_identity
 {"manifest":{...},"quorum_public_key":"...","ephemeral_public_key":"...","attestation_doc":"..."}
 # manifest is the v2 manifest envelope as structured JSON; attestation_doc is
-# a fresh COSE Sign1 doc committing to the manifest and the ephemeral key.
+# a fresh COSE Sign1 doc committing to the manifest.
 # Callers verify the doc, then encrypt request payloads to the quorum key
 # from the attested manifest.
 

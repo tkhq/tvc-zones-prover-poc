@@ -5,9 +5,8 @@
 //!
 //! 0. Decode the `BatchOutput`, recompute its canonical QOS JSON encoding,
 //!    and verify the quorum and ephemeral signatures over those bytes.
-//! 1. Decode the attestation document and check
-//!    `user_data == sha256(batch_output)` and that the doc's `public_key`
-//!    is the key that signed the batch output.
+//! 1. Verify the attestation binding: decode the attestation document and
+//!    check `user_data == sha256(batch_output)`.
 //! 2. Verify the certificate chain against the AWS Nitro root and the COSE
 //!    Sign1 signature.
 //! 3. Print PCR0/1/2/3 for comparison against known-good release values.
@@ -70,11 +69,11 @@ pub fn emulate_onchain_verifier(
         .user_data
         .as_ref()
         .ok_or("attestation doc has no user_data")?;
-    // The one deviation from a standard QOS doc: user_data commits to
+    // The one deviation from a standard QOS doc: user_data binds
     // sha256 of the batch output instead of the manifest hash.
     if user_data.as_ref() != sha2::Sha256::digest(&batch_output).as_slice() {
         return Err(format!(
-            "attestation user_data does not commit to the batch output:\n  user_data:              {}\n  sha256(batch_output):   {}",
+            "attestation user_data does not bind the batch output:\n  user_data:              {}\n  sha256(batch_output):   {}",
             qos_hex::encode(user_data),
             qos_hex::encode(&sha2::Sha256::digest(&batch_output))
         ));
@@ -89,7 +88,7 @@ pub fn emulate_onchain_verifier(
                 .to_string(),
         );
     }
-    println!("ok: user_data == sha256(batch_output); public_key == the signing ephemeral key");
+    println!("ok: attestation binding: user_data == sha256(batch_output)");
 
     // Step 2: verify the certificate chain against the AWS Nitro root and
     // the COSE Sign1 signature.

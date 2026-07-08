@@ -163,8 +163,9 @@ key against the attested manifest and the ephemeral key via the response's
 own attestation document.
 
 Phase 2 (**on-chain verifier**) then verifies the prove response the way a
-verifier contract / precompile would: attestation doc decode,
-`user_data == sha256(batch_output)`, certificate chain, PCR0-3, the PCR17
+verifier contract / precompile would: attestation doc decode, the
+attestation binding (`user_data == sha256(batch_output)`), certificate
+chain, PCR0-3, the PCR17
 manifest commitment, manifest decode + cross-checks, and the pivot hash —
 which should equal the **Expected Executable Digest** from step 4b's CI
 output for a correctly deployed app.

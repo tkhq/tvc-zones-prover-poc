@@ -36,10 +36,10 @@ pub struct ProveZoneBatchResponse {
     /// The ephemeral signing public key.
     #[serde(with = "qos_hex::serde")]
     pub ephemeral_public_key: Vec<u8>,
-    /// COSE Sign1 NSM attestation document with the sha256 of the canonical
-    /// QOS JSON batch output bytes in `user_data` and the ephemeral public
-    /// key in `public_key`. The full batch output does not fit the NSM's
-    /// `user_data` size limit, so the document commits to its hash.
+    /// COSE Sign1 NSM attestation document binding the batch output: the
+    /// sha256 of the canonical QOS JSON batch output bytes in `user_data`.
+    /// The full batch output does not fit the NSM's `user_data` size
+    /// limit, so the binding is over its hash.
     #[serde(with = "qos_hex::serde")]
     pub attestation_doc: Vec<u8>,
     /// The QOS v2 manifest envelope loaded at server startup, as structured
@@ -70,8 +70,8 @@ fn decrypt_and_prove(
 
 /// Prove a zone batch: decrypt and prove the witness, sign the canonical
 /// QOS JSON batch output bytes with the quorum and ephemeral keys, and
-/// attach an NSM attestation doc committing to `sha256(batch_output)` plus
-/// the QOS manifest.
+/// attach an NSM attestation doc binding `sha256(batch_output)` and
+/// committing to the QOS manifest.
 pub(crate) async fn prove_zone_batch(
     State(state): State<AppState>,
     Json(request): Json<ProveZoneBatchRequest>,
@@ -92,7 +92,7 @@ pub(crate) async fn prove_zone_batch(
         .map_err(|e| AppError::internal(format!("failed to sign with ephemeral key: {e:?}")))?;
     let ephemeral_public_key = state.ephemeral_key.public_key().to_bytes();
 
-    // Commit to the hash of the batch output: the NSM caps `user_data` at
+    // Bind the hash of the batch output: the NSM caps `user_data` at
     // 512 bytes, so the full serialized batch output cannot be embedded.
     let user_data = sha2::Sha256::digest(&signed_payload).to_vec();
     let nsm_response = state.nsm.nsm_process_request(NsmRequest::Attestation {

@@ -9,4 +9,6 @@ pub(crate) use identity::enclave_identity;
 pub(crate) use prove::prove_zone_batch;
 
 pub use identity::EnclaveIdentityResponse;
-pub use prove::{ProveZoneBatchRequest, ProveZoneBatchResponse};
+pub use prove::{
+    EphemeralKeyProof, NsmProof, ProveZoneBatchRequest, ProveZoneBatchResponse, QuorumKeyProof,
+};

@@ -44,14 +44,37 @@ async fn run(cli: Cli) -> Result<(), String> {
     println!("==============================================================");
     println!("PHASE 1: SEQUENCER - fetch identity, encrypt + submit witness");
     println!("==============================================================");
-    let response =
+    let (response, pinned) =
         sequencer::emulate_sequencer(&client, &base_url, cli.unsafe_skip_root_verification).await?;
 
     println!();
     println!("==============================================================");
     println!("PHASE 2: ON-CHAIN VERIFIER - verify the prove response");
     println!("==============================================================");
-    onchain::emulate_onchain_verifier(&response, cli.unsafe_skip_root_verification)?;
+    println!(
+        "\nEach proof is verified independently against values assumed to be\n\
+         pinned on chain (here sourced from the verified enclave identity):\n\
+         any one of the three suffices on its own."
+    );
+
+    println!("\n--- proof 1/3: QK model (pinned quorum public key) ---");
+    onchain::verify_qk_proof(&response.batch_output, &response.qk_proof, &pinned)?;
+
+    println!("\n--- proof 2/3: EK model (pinned manifest hash + PCRs, boot proof) ---");
+    onchain::verify_ek_proof(
+        &response.batch_output,
+        &response.ek_proof,
+        &pinned,
+        cli.unsafe_skip_root_verification,
+    )?;
+
+    println!("\n--- proof 3/3: attestation binding (pinned manifest hash + PCRs) ---");
+    onchain::verify_nsm_proof(
+        &response.batch_output,
+        &response.nsm_proof,
+        &pinned,
+        cli.unsafe_skip_root_verification,
+    )?;
 
     println!("\nall checks passed");
     if cli.unsafe_skip_root_verification {

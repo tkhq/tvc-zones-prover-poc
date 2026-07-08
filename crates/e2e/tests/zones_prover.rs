@@ -102,55 +102,73 @@ async fn test_prove_zone_batch() {
         assert_eq!(resp.status(), 200);
         let json: serde_json::Value = resp.json().await.unwrap();
 
-        let hex_field = |field: &str| qos_hex::decode(json[field].as_str().unwrap()).unwrap();
+        let hex_at = |pointer: &str| {
+            qos_hex::decode(json.pointer(pointer).unwrap().as_str().unwrap()).unwrap()
+        };
 
-        // The batch output is returned as structured JSON; the signed bytes
-        // are its canonical QOS JSON encoding, recomputed locally.
-        let output: tempo_zones_stubs::BatchOutput =
-            serde_json::from_value(json["batch_output"].clone()).unwrap();
+        // batch_output is the canonical QOS JSON bytes of the expected
+        // output; all three proofs bind exactly these bytes.
+        let batch_output = hex_at("/batch_output");
+        let output: tempo_zones_stubs::BatchOutput = serde_json::from_slice(&batch_output).unwrap();
         assert_eq!(output, expected_output);
-        let batch_output = qos_json::to_vec(&output).unwrap();
+        assert_eq!(qos_json::to_vec(&output).unwrap(), batch_output);
 
-        for (public_key_field, signature_field) in [
-            ("quorum_public_key", "quorum_key_signature"),
-            ("ephemeral_public_key", "ephemeral_key_signature"),
-        ] {
-            let public_key = P256Public::from_bytes(&hex_field(public_key_field)).unwrap();
-            public_key
-                .verify(&batch_output, &hex_field(signature_field))
-                .unwrap();
-        }
-
-        // The attestation doc is a real COSE Sign1 document built by the
-        // NSM. It must bind sha256(batch_output) via `user_data` and
-        // commit to the manifest hash via the live manifest-commitment
-        // PCR.
         use qos_core::protocol::services::boot::manifest::canonical_json_hash;
         use sha2::Digest as _;
+        let envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
+            serde_json::from_slice(&test_args.manifest).unwrap();
+        let manifest_hash = canonical_json_hash(&envelope.manifest);
+
+        // qk_proof: quorum key signature over the batch output bytes.
+        let quorum_public =
+            P256Public::from_bytes(&envelope.manifest.namespace.quorum_key).unwrap();
+        quorum_public
+            .verify(&batch_output, &hex_at("/qk_proof/qk_sig"))
+            .unwrap();
+
+        // ek_proof: boot proof (manifest hash in user_data, PCR17 live
+        // commitment) establishing the ephemeral key, which verifies ek_sig.
+        let boot_doc =
+            qos_nsm::nitro::unsafe_attestation_doc_from_der(&hex_at("/ek_proof/bootproof_att_doc"))
+                .unwrap();
+        assert_eq!(boot_doc.user_data.as_ref().unwrap().as_ref(), manifest_hash);
+        qos_nsm::nitro::verify_attestation_doc_manifest_commitment(
+            &boot_doc,
+            qos_nsm::nitro::ManifestCommitmentKind::Live,
+            &manifest_hash,
+        )
+        .unwrap();
+        let ephemeral_public_key = boot_doc.public_key.as_ref().unwrap().to_vec();
+        P256Public::from_bytes(&ephemeral_public_key)
+            .unwrap()
+            .verify(&batch_output, &hex_at("/ek_proof/ek_sig"))
+            .unwrap();
+
+        // nsm_proof: attestation doc binding sha256(batch_output), anchored
+        // to the manifest hash via the PCR17 live commitment.
         let doc =
-            qos_nsm::nitro::unsafe_attestation_doc_from_der(&hex_field("attestation_doc")).unwrap();
+            qos_nsm::nitro::unsafe_attestation_doc_from_der(&hex_at("/nsm_proof/att_doc")).unwrap();
         assert_eq!(
             doc.user_data.as_ref().unwrap().as_ref(),
             sha2::Sha256::digest(&batch_output).as_slice(),
-            "attestation user_data should be sha256 of the canonical batch output bytes"
+            "attestation user_data should be sha256 of the batch output bytes"
         );
         assert_eq!(
             doc.public_key.as_ref().unwrap().as_ref(),
-            hex_field("ephemeral_public_key"),
+            ephemeral_public_key,
             "attestation public_key should be the ephemeral public key"
         );
-        let envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
-            serde_json::from_slice(&test_args.manifest).unwrap();
         qos_nsm::nitro::verify_attestation_doc_manifest_commitment(
             &doc,
             qos_nsm::nitro::ManifestCommitmentKind::Live,
-            &canonical_json_hash(&envelope.manifest),
+            &manifest_hash,
         )
         .unwrap();
 
-        let response_envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
-            serde_json::from_value(json["manifest"].clone()).unwrap();
-        assert_eq!(response_envelope, envelope);
+        assert!(
+            json.get("manifest").is_none(),
+            "prove response should not carry the manifest"
+        );
     }
     e2e::Builder::new().execute(test).await;
 }

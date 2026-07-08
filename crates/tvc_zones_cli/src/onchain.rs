@@ -1,171 +1,188 @@
 //! Reference implementation of the ON-CHAIN VERIFIER role.
 //!
-//! What an on-chain verifier contract / precompile does with a prove
-//! response, step by step:
+//! The prove response carries the batch output as canonical QOS JSON bytes
+//! plus three independent proofs. Each proof has its own verification
+//! function and trust model, distinguished by what the chain has pinned
+//! out of band — any one of them suffices on its own:
 //!
-//! 0. Decode the `BatchOutput`, recompute its canonical QOS JSON encoding,
-//!    and verify the quorum and ephemeral signatures over those bytes.
-//! 1. Verify the attestation binding: decode the attestation document and
-//!    check `user_data == sha256(batch_output)`.
-//! 2. Verify the certificate chain against the AWS Nitro root and the COSE
-//!    Sign1 signature.
-//! 3. Print PCR0/1/2/3 for comparison against known-good release values.
-//! 4. Verify the QOS live manifest commitment: `hash(manifest)` + the
-//!    attested key must extend to the value in PCR17.
-//! 5. Decode the manifest and print its key fields, cross-checking the
-//!    quorum key and the enclave PCRs.
-//! 6. Print the manifest pivot hash for comparison against a known-good
-//!    reproducible build of the app.
+//! - [`verify_qk_proof`] (QK model): pins the deployment-wide quorum
+//!   public key. One signature verification; the cheapest on chain.
+//! - [`verify_ek_proof`] (EK model): pins the manifest hash and PCRs. A
+//!   boot proof attestation doc establishes the per-replica ephemeral key,
+//!   which verifies the batch signature. The boot proof only changes when
+//!   a replica boots, so it can be verified once and the key cached.
+//! - [`verify_nsm_proof`] (attestation-binding model): pins the manifest
+//!   hash and PCRs. A per-request attestation doc binds
+//!   `sha256(batch_output)` directly — no signatures involved.
+//!
+//! Both attestation-based models must pin PCR0-3 alongside the manifest
+//! hash: the PCR17 live commitment is extended by software inside the
+//! enclave, so it only carries authority if PCR0-2 prove that software is
+//! a known-good QOS release.
+//!
+//! The verifier never re-serializes: it hashes and verifies the
+//! `batch_output` bytes exactly as received, and anything that consumes
+//! batch output fields must parse those same bytes.
 
-use qos_core::protocol::services::boot::VersionedManifestEnvelope;
-use qos_core::protocol::services::boot::manifest::canonical_json_hash;
 use qos_nsm::nitro::{
     LIVE_MANIFEST_COMMITMENT_PCR_INDEX, ManifestCommitmentKind, unsafe_attestation_doc_from_der,
     verify_attestation_doc_manifest_commitment,
 };
 use sha2::Digest as _;
-use zones_prover::ProveZoneBatchResponse;
+use zones_prover::{EphemeralKeyProof, NsmProof, QuorumKeyProof};
 
 use crate::attest::{doc_pcr, verify_attestation_doc_root, verify_signature};
 
-/// Emulate what an ON-CHAIN VERIFIER contract / precompile does with a
-/// prove response, step by step. See the module docs for the step list.
-#[allow(clippy::too_many_lines)]
-pub fn emulate_onchain_verifier(
-    response: &ProveZoneBatchResponse,
-    unsafe_skip_root_verification: bool,
+/// Values the on-chain verifier is assumed to have pinned out of band.
+/// The CLI sources them from the sequencer phase's independently verified
+/// enclave identity.
+pub struct PinnedValues {
+    /// The deployment-wide quorum public key (QK model).
+    pub quorum_public_key: Vec<u8>,
+    /// The canonical QOS JSON manifest hash (EK and attestation-binding
+    /// models).
+    pub manifest_hash: [u8; 32],
+    /// Known-good enclave platform PCR0-3 values (EK and
+    /// attestation-binding models).
+    pub pcrs: [Vec<u8>; 4],
+}
+
+/// Check an attestation doc's platform PCR0-3 against the pinned
+/// known-good values.
+fn verify_pinned_pcrs(
+    doc: &aws_nitro_enclaves_nsm_api::api::AttestationDoc,
+    pinned_pcrs: &[Vec<u8>; 4],
 ) -> Result<(), String> {
-    // Step 0: recompute the canonical signed bytes and verify the
-    // signatures over exactly those bytes. The response carries the
-    // BatchOutput as structured JSON, already decoded into the full Rust
-    // type; the enclave signs its canonical QOS JSON encoding, so a
-    // verifier re-encodes it canonically and never trusts unparsed bytes.
-    println!("\nverifier step 0: recompute canonical batch output bytes and verify signatures");
-    let batch_output = qos_json::to_vec(&response.batch_output)
-        .map_err(|e| format!("failed to canonically serialize the batch output: {e}"))?;
+    for (index, pinned) in pinned_pcrs.iter().enumerate() {
+        let measured = doc_pcr(doc, index)?;
+        if &measured != pinned {
+            return Err(format!(
+                "attestation doc PCR{index} does not match the pinned value:\n  doc:    {}\n  pinned: {}",
+                qos_hex::encode(&measured),
+                qos_hex::encode(pinned)
+            ));
+        }
+    }
+    println!("ok: PCR0/1/2/3 match the pinned known-good values");
+    Ok(())
+}
+
+/// QK model: verify the quorum key signature over the `batch_output`
+/// bytes against the pinned quorum public key. Nothing else is needed.
+pub fn verify_qk_proof(
+    batch_output: &[u8],
+    proof: &QuorumKeyProof,
+    pinned: &PinnedValues,
+) -> Result<(), String> {
     verify_signature(
-        &response.quorum_public_key,
-        &response.quorum_key_signature,
-        &batch_output,
-        "quorum_key_signature",
-    )?;
-    verify_signature(
-        &response.ephemeral_public_key,
-        &response.ephemeral_key_signature,
-        &batch_output,
-        "ephemeral_key_signature",
+        &pinned.quorum_public_key,
+        &proof.qk_sig,
+        batch_output,
+        "qk_sig",
     )?;
     println!(
-        "ok: quorum + ephemeral signatures verify over the recomputed canonical QOS JSON \
-         ({} bytes)",
+        "ok: qk_sig verifies over the batch output bytes ({} bytes) with the pinned quorum key",
         batch_output.len()
     );
+    Ok(())
+}
 
-    // Step 1: decode the attestation document.
-    println!("\nverifier step 1: decode attestation document (COSE Sign1 -> AttestationDoc)");
-    let doc = unsafe_attestation_doc_from_der(&response.attestation_doc)
-        .map_err(|e| format!("attestation_doc is not a COSE Sign1 attestation document: {e:?}"))?;
+/// EK model: verify the boot proof against the pinned manifest hash and
+/// PCRs to establish the per-replica ephemeral key, then verify the
+/// ephemeral key signature over the `batch_output` bytes.
+pub fn verify_ek_proof(
+    batch_output: &[u8],
+    proof: &EphemeralKeyProof,
+    pinned: &PinnedValues,
+    unsafe_skip_root_verification: bool,
+) -> Result<(), String> {
+    // Authenticate the boot proof doc: cert chain to the AWS Nitro root
+    // plus the COSE Sign1 signature.
+    verify_attestation_doc_root(&proof.bootproof_att_doc, unsafe_skip_root_verification)?;
+    let doc = unsafe_attestation_doc_from_der(&proof.bootproof_att_doc).map_err(|e| {
+        format!("bootproof_att_doc is not a COSE Sign1 attestation document: {e:?}")
+    })?;
+    verify_pinned_pcrs(&doc, &pinned.pcrs)?;
+
+    // A standard QOS identity doc commits to the manifest hash in
+    // user_data; check it against the pinned value.
+    let user_data = doc
+        .user_data
+        .as_ref()
+        .ok_or("boot proof attestation doc has no user_data")?;
+    if user_data.as_ref() != pinned.manifest_hash {
+        return Err(format!(
+            "boot proof user_data does not commit to the pinned manifest hash:\n  user_data:            {}\n  pinned manifest hash: {}",
+            qos_hex::encode(user_data),
+            qos_hex::encode(&pinned.manifest_hash)
+        ));
+    }
+
+    // PCR17 must extend to the (pinned manifest hash, attested ephemeral
+    // key) live commitment: this is what binds the ephemeral key to the
+    // pinned deployment.
+    verify_attestation_doc_manifest_commitment(
+        &doc,
+        ManifestCommitmentKind::Live,
+        &pinned.manifest_hash,
+    )
+    .map_err(|e| format!("live manifest commitment verification failed: {e:?}"))?;
+    let ephemeral_public_key = doc
+        .public_key
+        .as_ref()
+        .ok_or("boot proof attestation doc has no public_key")?;
+    println!(
+        "ok: boot proof authentic, user_data == pinned manifest hash, \
+         PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX} live commitment binds the ephemeral key"
+    );
+
+    verify_signature(ephemeral_public_key, &proof.ek_sig, batch_output, "ek_sig")?;
+    println!("ok: ek_sig verifies over the batch output bytes with the attested ephemeral key");
+    Ok(())
+}
+
+/// Attestation-binding model: verify a per-request attestation doc whose
+/// `user_data` binds `sha256(batch_output)`, with the pinned PCRs and the
+/// PCR17 live commitment anchoring the doc to the pinned deployment.
+pub fn verify_nsm_proof(
+    batch_output: &[u8],
+    proof: &NsmProof,
+    pinned: &PinnedValues,
+    unsafe_skip_root_verification: bool,
+) -> Result<(), String> {
+    // Authenticate the doc: cert chain to the AWS Nitro root plus the
+    // COSE Sign1 signature.
+    verify_attestation_doc_root(&proof.att_doc, unsafe_skip_root_verification)?;
+    let doc = unsafe_attestation_doc_from_der(&proof.att_doc)
+        .map_err(|e| format!("att_doc is not a COSE Sign1 attestation document: {e:?}"))?;
+    verify_pinned_pcrs(&doc, &pinned.pcrs)?;
+
+    // The one deviation from a standard QOS doc: user_data binds sha256 of
+    // the batch output bytes instead of the manifest hash.
     let user_data = doc
         .user_data
         .as_ref()
         .ok_or("attestation doc has no user_data")?;
-    // The one deviation from a standard QOS doc: user_data binds
-    // sha256 of the batch output instead of the manifest hash.
-    if user_data.as_ref() != sha2::Sha256::digest(&batch_output).as_slice() {
+    if user_data.as_ref() != sha2::Sha256::digest(batch_output).as_slice() {
         return Err(format!(
             "attestation user_data does not bind the batch output:\n  user_data:              {}\n  sha256(batch_output):   {}",
             qos_hex::encode(user_data),
-            qos_hex::encode(&sha2::Sha256::digest(&batch_output))
+            qos_hex::encode(&sha2::Sha256::digest(batch_output))
         ));
-    }
-    let doc_public_key = doc
-        .public_key
-        .as_ref()
-        .ok_or("attestation doc has no public_key")?;
-    if doc_public_key.as_ref() != response.ephemeral_public_key {
-        return Err(
-            "attestation doc public_key does not match the response's ephemeral public key"
-                .to_string(),
-        );
     }
     println!("ok: attestation binding: user_data == sha256(batch_output)");
 
-    // Step 2: verify the certificate chain against the AWS Nitro root and
-    // the COSE Sign1 signature.
-    println!("\nverifier step 2: verify certificate chain against the AWS Nitro root");
-    verify_attestation_doc_root(&response.attestation_doc, unsafe_skip_root_verification)?;
-
-    // Step 3: print the platform PCRs.
+    // PCR17 anchors the doc to the pinned deployment: it must extend to
+    // the (pinned manifest hash, attested ephemeral key) live commitment.
+    verify_attestation_doc_manifest_commitment(
+        &doc,
+        ManifestCommitmentKind::Live,
+        &pinned.manifest_hash,
+    )
+    .map_err(|e| format!("live manifest commitment verification failed: {e:?}"))?;
     println!(
-        "\nverifier step 3: enclave platform PCRs (compare against known-good release values)"
+        "ok: PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX} live commitment extends the pinned manifest \
+         hash"
     );
-    let pcr0 = doc_pcr(&doc, 0)?;
-    let pcr1 = doc_pcr(&doc, 1)?;
-    let pcr2 = doc_pcr(&doc, 2)?;
-    let pcr3 = doc_pcr(&doc, 3)?;
-    println!("  PCR0 (enclave image):    {}", qos_hex::encode(&pcr0));
-    println!("  PCR1 (kernel/bootstrap): {}", qos_hex::encode(&pcr1));
-    println!("  PCR2 (application):      {}", qos_hex::encode(&pcr2));
-    println!("  PCR3 (IAM role):         {}", qos_hex::encode(&pcr3));
-
-    // Step 4: verify the QOS live manifest commitment in PCR17.
-    println!(
-        "\nverifier step 4: verify manifest commitment PCR (hash(manifest) + ephemeral key -> PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX})"
-    );
-    // The manifest arrives as structured JSON, already decoded into the
-    // full manifest envelope type: recompute the attested hash locally.
-    let VersionedManifestEnvelope::V2(envelope) = &response.manifest else {
-        return Err("manifest is not a v2 manifest envelope".to_string());
-    };
-    let manifest_hash = canonical_json_hash(&envelope.manifest);
-    // Note: qos 0.12 uses PCR16 for the setup/boot commitment and PCR17 for
-    // the live/app commitment; a running app attests the live one.
-    verify_attestation_doc_manifest_commitment(&doc, ManifestCommitmentKind::Live, &manifest_hash)
-        .map_err(|e| format!("live manifest commitment verification failed: {e:?}"))?;
-    println!(
-        "ok: PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX} == SHA384-extend of the domain-separated \
-         (manifest hash, ephemeral key) commitment"
-    );
-
-    // Step 5: decode the manifest and print its key fields.
-    println!("\nverifier step 5: decode manifest (JSON -> ManifestEnvelopeV2)");
-    let manifest = &envelope.manifest;
-    println!("  namespace: {}", manifest.namespace.name);
-    println!(
-        "  approvals: {} of {} manifest set, {} of {} share set",
-        envelope.manifest_set_approvals.len(),
-        manifest.manifest_set.members.len(),
-        envelope.share_set_approvals.len(),
-        manifest.share_set.members.len()
-    );
-    if manifest.namespace.quorum_key != response.quorum_public_key {
-        return Err(format!(
-            "manifest quorum key does not match the quorum key that signed the batch output:\n  manifest: {}\n  response: {}",
-            qos_hex::encode(&manifest.namespace.quorum_key),
-            qos_hex::encode(&response.quorum_public_key)
-        ));
-    }
-    println!("ok: manifest quorum key == quorum key that signed the batch output");
-    for (index, doc_value, manifest_value) in [
-        (0u16, &pcr0, &manifest.enclave.pcr0),
-        (1, &pcr1, &manifest.enclave.pcr1),
-        (2, &pcr2, &manifest.enclave.pcr2),
-        (3, &pcr3, &manifest.enclave.pcr3),
-    ] {
-        if doc_value != manifest_value {
-            return Err(format!(
-                "attestation doc PCR{index} does not match the manifest's expected value:\n  doc:      {}\n  manifest: {}",
-                qos_hex::encode(doc_value),
-                qos_hex::encode(manifest_value)
-            ));
-        }
-    }
-    println!("ok: attestation doc PCR0/1/2/3 match the manifest's expected enclave PCRs");
-
-    // Step 6: the pivot hash, to compare against the known-good hash of
-    // the reproducibly built zones_prover app binary.
-    println!("\nverifier step 6: manifest pivot (app) hash");
-    println!("  pivot hash: {}", qos_hex::encode(&manifest.pivot.hash));
-
     Ok(())
 }

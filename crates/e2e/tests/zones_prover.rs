@@ -76,7 +76,7 @@ async fn test_prove_zone_batch() {
         let expected_output = tempo_zone_stubs::prover::prove_zone_batch(&witness).unwrap();
 
         // Fetch the enclave identity and encrypt the witness to the
-        // ephemeral key.
+        // quorum key.
         let identity: serde_json::Value = client
             .get(format!("{}/enclave_identity", test_args.base_url))
             .send()
@@ -85,11 +85,11 @@ async fn test_prove_zone_batch() {
             .json()
             .await
             .unwrap();
-        let ephemeral_public = P256Public::from_bytes(
-            &qos_hex::decode(identity["ephemeral_public_key"].as_str().unwrap()).unwrap(),
+        let quorum_public = P256Public::from_bytes(
+            &qos_hex::decode(identity["quorum_public_key"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        let encrypted_witness = ephemeral_public
+        let encrypted_witness = quorum_public
             .encrypt(&serde_json::to_vec(&witness).unwrap())
             .unwrap();
 

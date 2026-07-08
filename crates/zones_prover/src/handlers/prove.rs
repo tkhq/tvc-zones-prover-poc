@@ -10,9 +10,9 @@ use tempo_zone_stubs::{BatchOutput, BatchWitness, prover};
 #[derive(Serialize, Deserialize)]
 pub struct ProveZoneBatchRequest {
     /// The JSON serialized batch witness (matching the tempo zones prover
-    /// input definitions), encrypted to the enclave's ephemeral public key
-    /// with qos_p256. Callers fetch and verify the ephemeral key via
-    /// `GET /enclave_identity` before encrypting.
+    /// input definitions), encrypted to the enclave's quorum public key
+    /// with qos_p256. Callers fetch the quorum key from the attested
+    /// manifest via `GET /enclave_identity` before encrypting.
     #[serde(with = "qos_hex::serde")]
     pub encrypted_witness: Vec<u8>,
 }
@@ -49,18 +49,18 @@ pub struct ProveZoneBatchResponse {
     pub manifest: VersionedManifestEnvelope,
 }
 
-/// Decrypt the request's witness with the enclave's ephemeral key and run
+/// Decrypt the request's witness with the enclave's quorum key and run
 /// the prover over it.
 fn decrypt_and_prove(
     state: &AppState,
     request: &ProveZoneBatchRequest,
 ) -> Result<BatchOutput, AppError> {
     let witness_json = state
-        .ephemeral_key
+        .quorum_key
         .decrypt(&request.encrypted_witness)
         .map_err(|e| {
             AppError::bad_request(format!(
-                "failed to decrypt witness with the enclave's ephemeral key: {e:?}"
+                "failed to decrypt witness with the enclave's quorum key: {e:?}"
             ))
         })?;
     let witness: BatchWitness = serde_json::from_slice(&witness_json)

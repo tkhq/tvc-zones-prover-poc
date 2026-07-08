@@ -46,32 +46,28 @@ pub fn emulate_onchain_verifier(
     println!("\nverifier step 0: recompute canonical batch output bytes and verify signatures");
     let batch_output = qos_json::to_vec(&response.batch_output)
         .map_err(|e| format!("failed to canonically serialize the batch output: {e}"))?;
-    println!(
-        "ok: re-serialized batch_output to canonical QOS JSON ({} bytes, the signing payload)",
-        batch_output.len()
-    );
     verify_signature(
         &response.quorum_public_key,
         &response.quorum_key_signature,
         &batch_output,
         "quorum_key_signature",
     )?;
-    println!("ok: quorum key signature verifies over the canonical batch output bytes");
     verify_signature(
         &response.ephemeral_public_key,
         &response.ephemeral_key_signature,
         &batch_output,
         "ephemeral_key_signature",
     )?;
-    println!("ok: ephemeral key signature verifies over the canonical batch output bytes");
+    println!(
+        "ok: quorum + ephemeral signatures verify over the recomputed canonical QOS JSON \
+         ({} bytes)",
+        batch_output.len()
+    );
 
     // Step 1: decode the attestation document.
     println!("\nverifier step 1: decode attestation document (COSE Sign1 -> AttestationDoc)");
     let doc = unsafe_attestation_doc_from_der(&response.attestation_doc)
         .map_err(|e| format!("attestation_doc is not a COSE Sign1 attestation document: {e:?}"))?;
-    println!("  module_id: {}", doc.module_id);
-    println!("  timestamp: {} (ms since epoch)", doc.timestamp);
-    println!("  digest:    {:?}", doc.digest);
     let user_data = doc
         .user_data
         .as_ref()
@@ -86,7 +82,6 @@ pub fn emulate_onchain_verifier(
             qos_hex::encode(&sha2::Sha256::digest(&batch_output))
         ));
     }
-    println!("ok: user_data == sha256(batch_output)");
     let doc_public_key = doc
         .public_key
         .as_ref()
@@ -97,7 +92,7 @@ pub fn emulate_onchain_verifier(
                 .to_string(),
         );
     }
-    println!("ok: attestation public_key == ephemeral public key that signed the batch output");
+    println!("ok: user_data == sha256(batch_output); public_key == the signing ephemeral key");
 
     // Step 2: verify the certificate chain against the AWS Nitro root and
     // the COSE Sign1 signature.
@@ -116,10 +111,6 @@ pub fn emulate_onchain_verifier(
     println!("  PCR1 (kernel/bootstrap): {}", qos_hex::encode(&pcr1));
     println!("  PCR2 (application):      {}", qos_hex::encode(&pcr2));
     println!("  PCR3 (IAM role):         {}", qos_hex::encode(&pcr3));
-    println!(
-        "  an on-chain verifier would compare these against the known-good values\n\
-         \x20 for the released enclave image (cross-checked against the manifest in step 5)"
-    );
 
     // Step 4: verify the QOS live manifest commitment in PCR17.
     println!(
@@ -131,19 +122,6 @@ pub fn emulate_onchain_verifier(
         return Err("manifest is not a v2 manifest envelope".to_string());
     };
     let manifest_hash = canonical_json_hash(&envelope.manifest);
-    println!(
-        "  manifest hash (canonical QOS JSON hash): {}",
-        qos_hex::encode(&manifest_hash)
-    );
-    println!(
-        "  attested ephemeral public key:           {}",
-        qos_hex::encode(&response.ephemeral_public_key)
-    );
-    let pcr17 = doc_pcr(&doc, usize::from(LIVE_MANIFEST_COMMITMENT_PCR_INDEX))?;
-    println!(
-        "  PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX} (live manifest commitment):     {}",
-        qos_hex::encode(&pcr17)
-    );
     // Note: qos 0.12 uses PCR16 for the setup/boot commitment and PCR17 for
     // the live/app commitment; a running app attests the live one.
     verify_attestation_doc_manifest_commitment(&doc, ManifestCommitmentKind::Live, &manifest_hash)
@@ -156,33 +134,13 @@ pub fn emulate_onchain_verifier(
     // Step 5: decode the manifest and print its key fields.
     println!("\nverifier step 5: decode manifest (JSON -> ManifestEnvelopeV2)");
     let manifest = &envelope.manifest;
-    println!("  schema version:       {:?}", manifest.version);
-    println!("  namespace:            {}", manifest.namespace.name);
-    println!("  nonce:                {}", manifest.namespace.nonce);
+    println!("  namespace: {}", manifest.namespace.name);
     println!(
-        "  quorum key:           {}",
-        qos_hex::encode(&manifest.namespace.quorum_key)
-    );
-    println!(
-        "  pivot (app) hash:     {}",
-        qos_hex::encode(&manifest.pivot.hash)
-    );
-    println!("  pivot restart:        {:?}", manifest.pivot.restart);
-    println!("  qos commit:           {}", manifest.enclave.qos_commit);
-    println!(
-        "  manifest set:         threshold {} of {} members",
-        manifest.manifest_set.threshold,
-        manifest.manifest_set.members.len()
-    );
-    println!(
-        "  share set:            threshold {} of {} members",
-        manifest.share_set.threshold,
-        manifest.share_set.members.len()
-    );
-    println!(
-        "  approvals:            {} manifest set, {} share set",
+        "  approvals: {} of {} manifest set, {} of {} share set",
         envelope.manifest_set_approvals.len(),
-        envelope.share_set_approvals.len()
+        manifest.manifest_set.members.len(),
+        envelope.share_set_approvals.len(),
+        manifest.share_set.members.len()
     );
     if manifest.namespace.quorum_key != response.quorum_public_key {
         return Err(format!(
@@ -208,13 +166,10 @@ pub fn emulate_onchain_verifier(
     }
     println!("ok: attestation doc PCR0/1/2/3 match the manifest's expected enclave PCRs");
 
-    // Step 6: the pivot (app) hash.
+    // Step 6: the pivot (app) hash, to compare against the known-good hash
+    // of the reproducibly built zones_prover app binary (the stagex build).
     println!("\nverifier step 6: manifest pivot (app) hash");
     println!("  pivot hash: {}", qos_hex::encode(&manifest.pivot.hash));
-    println!(
-        "  an on-chain verifier would compare this against the known-good hash of\n\
-         \x20 the reproducibly built zones_prover app binary (e.g. the stagex image build)"
-    );
 
     Ok(())
 }

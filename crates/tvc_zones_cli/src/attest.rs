@@ -58,8 +58,6 @@ pub fn verify_attestation_doc_root(
              (if this is a local --mock-nsm server, pass --unsafe-skip-root-verification)"
         )
     })?;
-    println!("ok: certificate chain verifies against the pinned AWS Nitro root certificate");
-    println!("ok: COSE Sign1 signature verifies against the end entity certificate");
-    println!("ok: attestation doc passes qos_nsm syntactic validation");
+    println!("ok: attestation doc authentic (cert chain to the AWS Nitro root + COSE Sign1)");
     Ok(())
 }

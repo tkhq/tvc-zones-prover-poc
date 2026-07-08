@@ -59,15 +59,15 @@ mod tests {
         /// JSON encoded v2 manifest envelope served by the router (whose
         /// hash the NSM commits to in PCR17).
         manifest: Vec<u8>,
-        /// Ephemeral public key witnesses must be encrypted to.
-        ephemeral_public: P256Public,
+        /// Quorum public key witnesses must be encrypted to.
+        quorum_public: P256Public,
     }
 
     fn router_with_generated_keys() -> TestRouter {
         let ephemeral_key = P256Pair::generate().expect("failed to generate ephemeral key");
-        let ephemeral_public = P256Public::from_bytes(&ephemeral_key.public_key().to_bytes())
-            .expect("failed to parse ephemeral public key");
         let quorum_key = P256Pair::generate().expect("failed to generate quorum key");
+        let quorum_public = P256Public::from_bytes(&quorum_key.public_key().to_bytes())
+            .expect("failed to parse quorum public key");
         let envelope = qos_core::protocol::services::boot::VersionedManifestEnvelope::V2(
             fake_manifest_envelope(&quorum_key.public_key().to_bytes()),
         );
@@ -84,18 +84,18 @@ mod tests {
         TestRouter {
             app,
             manifest,
-            ephemeral_public,
+            quorum_public,
         }
     }
 
-    /// Encrypt the given witness to the ephemeral key and return the
+    /// Encrypt the given witness to the quorum key and return the
     /// request body.
     fn encrypted_witness_body(
         witness: &tempo_zone_stubs::BatchWitness,
-        ephemeral_public: &P256Public,
+        quorum_public: &P256Public,
     ) -> String {
         let witness_json = serde_json::to_vec(witness).expect("witness should serialize");
-        let encrypted = ephemeral_public
+        let encrypted = quorum_public
             .encrypt(&witness_json)
             .expect("witness should encrypt");
         serde_json::json!({ "encrypted_witness": qos_hex::encode(&encrypted) }).to_string()
@@ -115,7 +115,7 @@ mod tests {
     }
 
     async fn prove_zone_batch_request(test_router: TestRouter) -> axum::response::Response {
-        let body = encrypted_witness_body(&example_witness(), &test_router.ephemeral_public);
+        let body = encrypted_witness_body(&example_witness(), &test_router.quorum_public);
         post_prove_zone_batch(test_router.app, body).await
     }
 
@@ -329,12 +329,12 @@ mod tests {
     async fn prove_zone_batch_rejects_invalid_witness_invariants() {
         let TestRouter {
             app,
-            ephemeral_public,
+            quorum_public,
             ..
         } = router_with_generated_keys();
         let mut witness = example_witness();
         witness.zone_blocks.clear();
-        let body = encrypted_witness_body(&witness, &ephemeral_public);
+        let body = encrypted_witness_body(&witness, &quorum_public);
         let response = post_prove_zone_batch(app, body).await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);

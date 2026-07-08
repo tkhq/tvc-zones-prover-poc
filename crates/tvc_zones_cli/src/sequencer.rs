@@ -3,24 +3,13 @@
 //! What a sequencer does to submit a zone batch to the enclave:
 //!
 //! 1. `GET /enclave_identity`, decoded into [`EnclaveIdentityResponse`].
-//! 2. Verify the identity attestation doc: root chain (unless skipped),
-//!    `user_data` == canonical QOS JSON manifest hash (the QOS convention),
-//!    and the PCR17 live manifest commitment.
-//! 3. Extract the ephemeral key FROM the attestation doc (never from the
-//!    unauthenticated JSON field) and the quorum key FROM the attested
-//!    manifest.
-//! 4. Encrypt the `BatchWitness` to the attested quorum key (qos_p256).
-//!    Ephemeral keys are per-replica; until TVC ships an endpoint listing
-//!    all live enclaves for an app (so a sequencer could encrypt to every
-//!    relevant ephemeral key), the demo encrypts to the quorum key.
+//! 2. Verify the identity attestation doc: root chain, `user_data` ==
+//!    manifest hash, and the PCR17 live manifest commitment.
+//! 3. Extract the quorum key from the attested manifest.
+//! 4. Encrypt the `BatchWitness` to it.
 //! 5. `POST /prove_zone_batch`, decoded into [`ProveZoneBatchResponse`].
-//! 6. Verify the response: the batch output matches the locally computed
-//!    one and both signatures verify over the locally re-serialized
-//!    canonical QOS JSON payload. The quorum key must match the attested
-//!    manifest; the ephemeral key is authenticated via the response's OWN
-//!    attestation doc (the replica that proves the batch may not be the
-//!    replica that served the identity, so the identity's ephemeral key
-//!    cannot be assumed here).
+//!    The response is trusted as-is here; the on-chain verifier phase is
+//!    responsible for verifying it.
 
 use qos_core::protocol::services::boot::VersionedManifestEnvelope;
 use qos_core::protocol::services::boot::manifest::canonical_json_hash;
@@ -29,11 +18,10 @@ use qos_nsm::nitro::{
     verify_attestation_doc_manifest_commitment,
 };
 use qos_p256::P256Public;
-use tempo_zone_stubs::fixtures::example_witness;
-use tempo_zone_stubs::prover::prove_zone_batch;
+use tempo_zones_stubs::fixtures::example_witness;
 use zones_prover::{EnclaveIdentityResponse, ProveZoneBatchRequest, ProveZoneBatchResponse};
 
-use crate::attest::{verify_attestation_doc_root, verify_signature};
+use crate::attest::verify_attestation_doc_root;
 
 /// Emulate what the SEQUENCER does to submit a zone batch to the enclave.
 /// Returns the prove response for the on-chain verifier phase.
@@ -91,28 +79,16 @@ pub async fn emulate_sequencer(
          commitment, manifest quorum key == identity quorum key"
     );
 
-    // 3. Extract the ephemeral key from the attestation doc and the quorum
-    //    key from the attested manifest.
-    println!(
-        "\nsequencer step 3: extract ephemeral key FROM the attestation doc and quorum key \
-         FROM the attested manifest"
-    );
-    let attested_ephemeral_key = identity_doc
-        .public_key
-        .as_ref()
-        .ok_or("identity attestation doc has no public_key")?
-        .to_vec();
+    // 3. Extract the quorum key from the attested manifest.
+    println!("\nsequencer step 3: extract quorum key from the attested manifest");
     let attested_quorum_key = envelope.manifest.namespace.quorum_key.clone();
     let encrypt_key = P256Public::from_bytes(&attested_quorum_key)
-        .map_err(|e| format!("attested quorum key is not a valid P256 public key: {e:?}"))?;
-    println!("ok: both keys extracted from attested sources only");
+        .map_err(|e| format!("quorum key is not a valid P256 public key: {e:?}"))?;
+    println!("ok: quorum key extracted from the attested manifest");
 
-    // 4. Encrypt the witness to the attested quorum key (ephemeral keys
-    //    are per-replica; see the module docs).
-    println!("\nsequencer step 4: encrypt BatchWitness to the attested quorum key");
+    // 4. Encrypt the witness to the quorum key.
+    println!("\nsequencer step 4: encrypt BatchWitness to the quorum key");
     let witness = example_witness();
-    let expected_output =
-        prove_zone_batch(&witness).map_err(|e| format!("example witness does not prove: {e}"))?;
     let witness_json =
         serde_json::to_vec(&witness).map_err(|e| format!("failed to serialize witness: {e}"))?;
     let encrypted_witness = encrypt_key
@@ -144,76 +120,7 @@ pub async fn emulate_sequencer(
     println!("ok: HTTP {status}");
     let response: ProveZoneBatchResponse = serde_json::from_str(&body)
         .map_err(|e| format!("response does not decode as ProveZoneBatchResponse: {e}"))?;
-
-    // 6. Verify the response against the locally computed output and the
-    //    attested keys.
-    println!("\nsequencer step 6: verify response");
-    if response.batch_output != expected_output {
-        return Err(format!(
-            "batch_output does not match the locally computed output:\n  got:      {:?}\n  expected: {expected_output:?}",
-            response.batch_output
-        ));
-    }
-    println!("ok: batch_output matches the locally computed BatchOutput");
-    // The response carries the BatchOutput as structured JSON; the signed
-    // bytes are its canonical QOS JSON encoding. Re-serialize locally and
-    // verify the signatures over exactly those recomputed bytes, never over
-    // unparsed response bytes.
-    let signed_payload = qos_json::to_vec(&response.batch_output)
-        .map_err(|e| format!("failed to canonically serialize the batch output: {e}"))?;
-    if response.quorum_public_key != attested_quorum_key {
-        return Err("response quorum key does not match the attested manifest quorum key".to_string());
-    }
-    // The response may come from a different replica than the identity
-    // call, so its ephemeral key is authenticated via the response's own
-    // attestation doc: same manifest commitment (PCR17), ephemeral key in
-    // `public_key`, and sha256 of the signing payload in `user_data`.
-    let response_doc = unsafe_attestation_doc_from_der(&response.attestation_doc)
-        .map_err(|e| format!("response attestation doc does not decode: {e:?}"))?;
-    verify_attestation_doc_root(&response.attestation_doc, unsafe_skip_root_verification)?;
-    let response_doc_key = response_doc
-        .public_key
-        .as_ref()
-        .ok_or("response attestation doc has no public_key")?;
-    if response_doc_key.as_ref() != response.ephemeral_public_key {
-        return Err(
-            "response attestation doc public_key does not match the response ephemeral key"
-                .to_string(),
-        );
-    }
-    if response.ephemeral_public_key != attested_ephemeral_key {
-        println!(
-            "note: a different replica answered the prove call; its ephemeral key is \
-             authenticated by the response's own attestation doc"
-        );
-    }
-    verify_attestation_doc_manifest_commitment(
-        &response_doc,
-        ManifestCommitmentKind::Live,
-        &manifest_hash,
-    )
-    .map_err(|e| format!("response live manifest commitment verification failed: {e:?}"))?;
-    println!(
-        "ok: response quorum key == attested manifest quorum key; ephemeral key bound to the \
-         same manifest via the response attestation doc (PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX})"
-    );
-    verify_signature(
-        &response.quorum_public_key,
-        &response.quorum_key_signature,
-        &signed_payload,
-        "quorum_key_signature",
-    )?;
-    verify_signature(
-        &response.ephemeral_public_key,
-        &response.ephemeral_key_signature,
-        &signed_payload,
-        "ephemeral_key_signature",
-    )?;
-    println!(
-        "ok: quorum + ephemeral signatures verify over the recomputed canonical QOS JSON \
-         ({} bytes)",
-        signed_payload.len()
-    );
+    println!("ok: decoded ProveZoneBatchResponse (verification happens in the on-chain verifier phase)");
 
     Ok(response)
 }

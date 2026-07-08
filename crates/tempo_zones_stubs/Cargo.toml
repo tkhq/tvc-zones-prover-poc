@@ -1,5 +1,5 @@
 [package]
-name = "tempo-zone-stubs"
+name = "tempo-zones-stubs"
 description = "All functions and types we expect to import directly from the tempo repo; spec-mirrored batch types are staged here until tempo publishes them"
 edition.workspace = true
 version.workspace = true

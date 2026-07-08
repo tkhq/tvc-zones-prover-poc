@@ -1,11 +1,10 @@
 //! CLI for verifying a live TVC zones prover deployment, in two labeled
-//! phases: [`sequencer`] (fetch and verify the enclave identity, encrypt
-//! the witness to the attested ephemeral key, submit, check the response)
-//! and [`onchain`] (verify the prove response the way an on-chain verifier
-//! contract / precompile would). See each module for its step-by-step
-//! reference implementation.
+//! phases: [`sequencer`] fetches and verifies the enclave identity and
+//! submits an encrypted batch witness; [`onchain`] verifies the prove
+//! response the way an on-chain verifier contract would. See each module
+//! for its step-by-step reference implementation.
 //!
-//! The default posture assumes LIVE infrastructure (real enclave + NSM).
+//! The default posture assumes live infrastructure with a real NSM.
 //! Mock attestation documents cannot chain to the AWS root; pass
 //! `--unsafe-skip-root-verification` to skip root verification only, with
 //! a loud warning, so every other check still runs locally.

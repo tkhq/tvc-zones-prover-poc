@@ -17,7 +17,7 @@ qos_p256 = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tempo-zone-stubs = { workspace = true, features = ["fixtures"] }
+tempo-zones-stubs = { workspace = true, features = ["fixtures"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 zones_prover = { workspace = true }
 

@@ -72,8 +72,8 @@ async fn test_enclave_identity() {
 async fn test_prove_zone_batch() {
     async fn test(test_args: TestArgs) {
         let client = reqwest::Client::new();
-        let witness = tempo_zone_stubs::fixtures::example_witness();
-        let expected_output = tempo_zone_stubs::prover::prove_zone_batch(&witness).unwrap();
+        let witness = tempo_zones_stubs::fixtures::example_witness();
+        let expected_output = tempo_zones_stubs::prover::prove_zone_batch(&witness).unwrap();
 
         // Fetch the enclave identity and encrypt the witness to the
         // quorum key.
@@ -106,7 +106,7 @@ async fn test_prove_zone_batch() {
 
         // The batch output is returned as structured JSON; the signed bytes
         // are its canonical QOS JSON encoding, recomputed locally.
-        let output: tempo_zone_stubs::BatchOutput =
+        let output: tempo_zones_stubs::BatchOutput =
             serde_json::from_value(json["batch_output"].clone()).unwrap();
         assert_eq!(output, expected_output);
         let batch_output = qos_json::to_vec(&output).unwrap();

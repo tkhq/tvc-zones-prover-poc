@@ -6,7 +6,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-tempo-zone-stubs = { workspace = true }
+tempo-zones-stubs = { workspace = true }
 # Dev/test utilities: only used behind the --mock-nsm code path.
 tvc_utils = { workspace = true }
 sha2 = { workspace = true }
@@ -29,6 +29,6 @@ serde = { version = "1.0", features = ["derive"] }
 workspace = true
 
 [dev-dependencies]
-tempo-zone-stubs = { workspace = true, features = ["fixtures"] }
+tempo-zones-stubs = { workspace = true, features = ["fixtures"] }
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }

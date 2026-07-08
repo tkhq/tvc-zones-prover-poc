@@ -3,22 +3,20 @@
 //! What an on-chain verifier contract / precompile does with a prove
 //! response, step by step:
 //!
-//! 0. Decode the `BatchOutput`, recompute its canonical QOS JSON encoding
-//!    (`qos_json::to_vec` — the exact bytes the enclave signs), and verify
-//!    the quorum and ephemeral signatures over those recomputed bytes.
-//! 1. Decode the attestation document (COSE Sign1 -> `AttestationDoc`) and
-//!    check `user_data == sha256(batch_output)` and that the doc's
-//!    `public_key` is the ephemeral key that signed the batch output.
+//! 0. Decode the `BatchOutput`, recompute its canonical QOS JSON encoding,
+//!    and verify the quorum and ephemeral signatures over those bytes.
+//! 1. Decode the attestation document and check
+//!    `user_data == sha256(batch_output)` and that the doc's `public_key`
+//!    is the key that signed the batch output.
 //! 2. Verify the certificate chain against the AWS Nitro root and the COSE
-//!    Sign1 signature (`qos_nsm::nitro::attestation_doc_from_der`).
+//!    Sign1 signature.
 //! 3. Print PCR0/1/2/3 for comparison against known-good release values.
-//! 4. Verify the QOS live manifest commitment: `hash(manifest)` (canonical
-//!    QOS JSON hash) + the attested ephemeral key must extend to the value
-//!    in PCR17 (`qos_nsm::nitro::LIVE_MANIFEST_COMMITMENT_PCR_INDEX`).
-//! 5. Decode the manifest (JSON -> `ManifestEnvelopeV2`) and print its key
-//!    fields, cross-checking the quorum key and the enclave PCRs.
-//! 6. Print the manifest pivot (app) hash for comparison against a
-//!    known-good reproducible build of the app.
+//! 4. Verify the QOS live manifest commitment: `hash(manifest)` + the
+//!    attested key must extend to the value in PCR17.
+//! 5. Decode the manifest and print its key fields, cross-checking the
+//!    quorum key and the enclave PCRs.
+//! 6. Print the manifest pivot hash for comparison against a known-good
+//!    reproducible build of the app.
 
 use qos_core::protocol::services::boot::VersionedManifestEnvelope;
 use qos_core::protocol::services::boot::manifest::canonical_json_hash;
@@ -72,9 +70,8 @@ pub fn emulate_onchain_verifier(
         .user_data
         .as_ref()
         .ok_or("attestation doc has no user_data")?;
-    // The one deviation from a standard QOS doc: user_data commits to the
-    // batch output (as sha256, since the NSM caps user_data at 512 bytes)
-    // instead of the manifest hash.
+    // The one deviation from a standard QOS doc: user_data commits to
+    // sha256 of the batch output instead of the manifest hash.
     if user_data.as_ref() != sha2::Sha256::digest(&batch_output).as_slice() {
         return Err(format!(
             "attestation user_data does not commit to the batch output:\n  user_data:              {}\n  sha256(batch_output):   {}",
@@ -166,8 +163,8 @@ pub fn emulate_onchain_verifier(
     }
     println!("ok: attestation doc PCR0/1/2/3 match the manifest's expected enclave PCRs");
 
-    // Step 6: the pivot (app) hash, to compare against the known-good hash
-    // of the reproducibly built zones_prover app binary (the stagex build).
+    // Step 6: the pivot hash, to compare against the known-good hash of
+    // the reproducibly built zones_prover app binary.
     println!("\nverifier step 6: manifest pivot (app) hash");
     println!("  pivot hash: {}", qos_hex::encode(&manifest.pivot.hash));
 

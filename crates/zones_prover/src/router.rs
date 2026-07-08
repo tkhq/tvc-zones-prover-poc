@@ -39,8 +39,8 @@ mod tests {
     use qos_p256::{P256Pair, P256Public};
     use sha2::Digest as _;
     use std::sync::Arc;
-    use tempo_zone_stubs::fixtures::example_witness;
-    use tempo_zone_stubs::{BatchOutput, prover::prove_zone_batch};
+    use tempo_zones_stubs::fixtures::example_witness;
+    use tempo_zones_stubs::{BatchOutput, prover::prove_zone_batch};
     use tower::ServiceExt;
     use tvc_utils::fake_manifest::fake_manifest_envelope;
     use tvc_utils::mock_nsm::MockNsm;
@@ -91,7 +91,7 @@ mod tests {
     /// Encrypt the given witness to the quorum key and return the
     /// request body.
     fn encrypted_witness_body(
-        witness: &tempo_zone_stubs::BatchWitness,
+        witness: &tempo_zones_stubs::BatchWitness,
         quorum_public: &P256Public,
     ) -> String {
         let witness_json = serde_json::to_vec(witness).expect("witness should serialize");

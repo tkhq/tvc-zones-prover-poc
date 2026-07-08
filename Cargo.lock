@@ -1131,7 +1131,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "tempo-zone-stubs",
+ "tempo-zones-stubs",
  "tokio",
  "tvc_utils",
 ]
@@ -3592,7 +3592,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tempo-zone-stubs"
+name = "tempo-zones-stubs"
 version = "0.2.0"
 dependencies = [
  "alloy-primitives",
@@ -3961,7 +3961,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sha2",
- "tempo-zone-stubs",
+ "tempo-zones-stubs",
  "tokio",
  "zones_prover",
 ]
@@ -4630,7 +4630,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempo-zone-stubs",
+ "tempo-zones-stubs",
  "tokio",
  "tower",
  "tower-http",

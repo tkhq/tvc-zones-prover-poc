@@ -4,14 +4,13 @@ use qos_core::protocol::services::boot::VersionedManifestEnvelope;
 use qos_nsm::types::{NsmRequest, NsmResponse};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
-use tempo_zone_stubs::{BatchOutput, BatchWitness, prover};
+use tempo_zones_stubs::{BatchOutput, BatchWitness, prover};
 
 /// Request body for `POST /prove_zone_batch`.
 #[derive(Serialize, Deserialize)]
 pub struct ProveZoneBatchRequest {
-    /// The JSON serialized batch witness (matching the tempo zones prover
-    /// input definitions), encrypted to the enclave's quorum public key
-    /// with qos_p256. Callers fetch the quorum key from the attested
+    /// The JSON serialized batch witness, encrypted to the enclave's
+    /// quorum public key. Callers fetch the quorum key from the attested
     /// manifest via `GET /enclave_identity` before encrypting.
     #[serde(with = "qos_hex::serde")]
     pub encrypted_witness: Vec<u8>,

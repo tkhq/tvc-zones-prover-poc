@@ -102,14 +102,8 @@ export TVC_PIVOT_IMAGE_URL='ghcr.io/tkhq/zones_prover:main@sha256:15fb6c54ed1bc0
 export TVC_EXPECTED_PIVOT_DIGEST='17f55247f42b177d847c84cd08aa54b770171b637d6d9035bc31ace1c76fafa4'
 ```
 
-> The `ghcr.io/tkhq/zones_prover` package must be **public** (or you must
-> pass `--pivot-pull-secret`): Turnkey's backend pulls the image itself and
-> fails deployment creation with `TVC_IMAGE_VALIDATION_FAILED` if it can't.
-
 Create the deployment (ports: the server listens on 3000 by default, and
-`/health` is served on the same listener). Note the `=` in
-`--pivot-args=...` — the value starts with `--`, so the space-separated
-form does not parse — and that the QOS version has no `v` prefix:
+`/health` is served on the same listener):
 
 ```sh
 tvc deploy create \

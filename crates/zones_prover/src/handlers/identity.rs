@@ -1,7 +1,6 @@
 use crate::{response::AppError, state::AppState};
 use axum::{Json, extract::State};
 use qos_core::protocol::services::boot::VersionedManifestEnvelope;
-use qos_nsm::types::{NsmRequest, NsmResponse};
 use serde::{Deserialize, Serialize};
 
 /// Response body for `GET /enclave_identity`.
@@ -31,23 +30,12 @@ pub struct EnclaveIdentityResponse {
 pub(crate) async fn enclave_identity(
     State(state): State<AppState>,
 ) -> Result<Json<EnclaveIdentityResponse>, AppError> {
-    let ephemeral_public_key = state.ephemeral_key.public_key().to_bytes();
-
-    let nsm_response = state.nsm.nsm_process_request(NsmRequest::Attestation {
-        user_data: Some(state.manifest_hash().to_vec()),
-        nonce: None,
-        public_key: Some(ephemeral_public_key.clone()),
-    });
-    let NsmResponse::Attestation { document } = nsm_response else {
-        return Err(AppError::internal(format!(
-            "unexpected NSM response: {nsm_response:?}"
-        )));
-    };
+    let document = state.attestation_doc(state.manifest_hash().to_vec())?;
 
     Ok(Json(EnclaveIdentityResponse {
         manifest: state.manifest_envelope(),
         quorum_public_key: state.quorum_key.public_key().to_bytes(),
-        ephemeral_public_key,
+        ephemeral_public_key: state.ephemeral_key.public_key().to_bytes(),
         attestation_doc: document,
     }))
 }

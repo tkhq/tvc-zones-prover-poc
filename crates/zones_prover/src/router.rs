@@ -119,35 +119,15 @@ mod tests {
         post_prove_zone_batch(test_router.app, body).await
     }
 
-    /// Decode the structured batch_output, re-serialize it to canonical QOS
-    /// JSON, verify both signatures over the recomputed bytes, and return
-    /// the signing payload.
-    fn assert_prove_zone_batch_signatures(json: &serde_json::Value) -> Vec<u8> {
-        let hex_field = |field: &str| {
-            qos_hex::decode(json[field].as_str().expect("field should be a string"))
-                .expect("field should hex decode")
-        };
-
-        // The batch output is the structured JSON BatchOutput for the
-        // example witness; the signatures are over its canonical QOS JSON
-        // encoding, recomputed locally.
-        let output: BatchOutput = serde_json::from_value(json["batch_output"].clone())
-            .expect("batch output should parse");
-        let expected = prove_zone_batch(&example_witness()).expect("example witness should prove");
-        assert_eq!(output, expected, "batch output should match the witness");
-        let batch_output = qos_json::to_vec(&output).expect("batch output should serialize");
-
-        for (public_key_field, signature_field) in [
-            ("quorum_public_key", "quorum_key_signature"),
-            ("ephemeral_public_key", "ephemeral_key_signature"),
-        ] {
-            let public_key = P256Public::from_bytes(&hex_field(public_key_field))
-                .expect("public key should decode");
-            public_key
-                .verify(&batch_output, &hex_field(signature_field))
-                .expect("signature should verify over the batch output");
-        }
-        batch_output
+    /// Decode a hex string field at a JSON pointer path like
+    /// `/qk_proof/qk_sig`.
+    fn hex_at(json: &serde_json::Value, pointer: &str) -> Vec<u8> {
+        qos_hex::decode(
+            json.pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| panic!("{pointer} should be a string field")),
+        )
+        .unwrap_or_else(|_| panic!("{pointer} should hex decode"))
     }
 
     #[tokio::test]
@@ -234,7 +214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prove_zone_batch_returns_attestation_doc_with_user_data_and_manifest() {
+    async fn prove_zone_batch_returns_batch_output_bytes_and_three_proofs() {
         let test_router = router_with_generated_keys();
         let manifest = test_router.manifest.clone();
         let response = prove_zone_batch_request(test_router).await;
@@ -244,46 +224,93 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&body).expect("response is not valid JSON");
 
-        let batch_output = assert_prove_zone_batch_signatures(&json);
+        // batch_output is the canonical QOS JSON bytes of the expected
+        // BatchOutput for the example witness.
+        let batch_output = hex_at(&json, "/batch_output");
+        let output: BatchOutput =
+            serde_json::from_slice(&batch_output).expect("batch output bytes should parse");
+        let expected = prove_zone_batch(&example_witness()).expect("example witness should prove");
+        assert_eq!(output, expected, "batch output should match the witness");
+        assert_eq!(
+            qos_json::to_vec(&output).expect("batch output should serialize"),
+            batch_output,
+            "batch output bytes should be canonical QOS JSON"
+        );
 
-        let hex_field = |field: &str| {
-            qos_hex::decode(json[field].as_str().expect("field should be a string"))
-                .expect("field should hex decode")
+        let envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
+            serde_json::from_slice(&manifest).expect("manifest envelope should decode");
+        let manifest_hash = canonical_json_hash(&envelope.manifest);
+        let ephemeral_public_key = {
+            let doc =
+                unsafe_attestation_doc_from_der(&hex_at(&json, "/ek_proof/bootproof_att_doc"))
+                    .expect("boot proof attestation doc should decode");
+            doc.public_key
+                .as_ref()
+                .expect("public_key present")
+                .to_vec()
         };
 
-        // The attestation doc is a real COSE Sign1 document binding
-        // sha256(batch_output) via `user_data`.
-        let doc = unsafe_attestation_doc_from_der(&hex_field("attestation_doc"))
+        // qk_proof: quorum key signature over the batch output bytes.
+        let quorum_public =
+            P256Public::from_bytes(&envelope.manifest.namespace.quorum_key).expect("quorum key");
+        quorum_public
+            .verify(&batch_output, &hex_at(&json, "/qk_proof/qk_sig"))
+            .expect("qk_sig should verify over the batch output bytes");
+
+        // ek_proof: boot proof committing to the manifest hash, plus an
+        // ephemeral key signature over the batch output bytes.
+        let boot_doc =
+            unsafe_attestation_doc_from_der(&hex_at(&json, "/ek_proof/bootproof_att_doc"))
+                .expect("boot proof attestation doc should decode");
+        assert_eq!(
+            boot_doc
+                .user_data
+                .as_ref()
+                .expect("user_data present")
+                .as_ref(),
+            manifest_hash,
+            "boot proof user_data should be the manifest hash"
+        );
+        verify_attestation_doc_manifest_commitment(
+            &boot_doc,
+            ManifestCommitmentKind::Live,
+            &manifest_hash,
+        )
+        .expect("boot proof live manifest commitment should verify");
+        let ephemeral_public =
+            P256Public::from_bytes(&ephemeral_public_key).expect("ephemeral key");
+        ephemeral_public
+            .verify(&batch_output, &hex_at(&json, "/ek_proof/ek_sig"))
+            .expect("ek_sig should verify over the batch output bytes");
+
+        // nsm_proof: attestation doc binding sha256(batch_output), anchored
+        // to the manifest hash via the PCR17 live commitment.
+        let doc = unsafe_attestation_doc_from_der(&hex_at(&json, "/nsm_proof/att_doc"))
             .expect("attestation doc should decode");
         assert_eq!(
             doc.user_data.as_ref().expect("user_data present").as_ref(),
             sha2::Sha256::digest(&batch_output).as_slice(),
-            "attestation user_data should be sha256 of the canonical batch output bytes"
+            "attestation user_data should be sha256 of the batch output bytes"
         );
         assert_eq!(
             doc.public_key
                 .as_ref()
                 .expect("public_key present")
                 .as_ref(),
-            hex_field("ephemeral_public_key"),
+            ephemeral_public_key,
             "attestation public_key should be the ephemeral public key"
         );
-
-        // PCR17 must carry the live manifest commitment for the served
-        // manifest and the attested ephemeral key.
-        let envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
-            serde_json::from_slice(&manifest).expect("manifest envelope should decode");
         verify_attestation_doc_manifest_commitment(
             &doc,
             ManifestCommitmentKind::Live,
-            &canonical_json_hash(&envelope.manifest),
+            &manifest_hash,
         )
         .expect("live manifest commitment should verify");
 
-        let response_envelope: qos_core::protocol::services::boot::ManifestEnvelopeV2 =
-            serde_json::from_value(json["manifest"].clone())
-                .expect("manifest envelope should decode");
-        assert_eq!(response_envelope, envelope);
+        assert!(
+            json.get("manifest").is_none(),
+            "prove response should not carry the manifest"
+        );
     }
 
     #[tokio::test]
@@ -326,9 +353,7 @@ mod tests {
     #[tokio::test]
     async fn prove_zone_batch_rejects_invalid_witness_invariants() {
         let TestRouter {
-            app,
-            quorum_public,
-            ..
+            app, quorum_public, ..
         } = router_with_generated_keys();
         let mut witness = example_witness();
         witness.zone_blocks.clear();

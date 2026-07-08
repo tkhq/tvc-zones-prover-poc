@@ -11,7 +11,6 @@ aws-nitro-enclaves-nsm-api = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 qos_core = { workspace = true }
 qos_hex = { workspace = true }
-qos_json = { workspace = true }
 qos_nsm = { workspace = true }
 qos_p256 = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }

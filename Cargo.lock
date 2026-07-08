@@ -3955,7 +3955,6 @@ dependencies = [
  "clap",
  "qos_core",
  "qos_hex",
- "qos_json",
  "qos_nsm",
  "qos_p256",
  "reqwest",

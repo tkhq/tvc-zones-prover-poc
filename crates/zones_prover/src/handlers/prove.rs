@@ -1,7 +1,5 @@
 use crate::{response::AppError, state::AppState};
 use axum::{Json, extract::State};
-use qos_core::protocol::services::boot::VersionedManifestEnvelope;
-use qos_nsm::types::{NsmRequest, NsmResponse};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use tempo_zones_stubs::{BatchOutput, BatchWitness, prover};
@@ -17,35 +15,70 @@ pub struct ProveZoneBatchRequest {
 }
 
 /// Response body for `POST /prove_zone_batch`.
+///
+/// The batch output travels as its canonical QOS JSON bytes — the exact
+/// bytes every proof binds — so a verifier (an on-chain contract in
+/// particular) hashes and checks the bytes as received, without
+/// re-serializing. The three proofs are independent alternatives: each
+/// suffices on its own, and each assumes the verifier pins a different
+/// value out of band. Nothing in the response is self-authenticating;
+/// the manifest body is available from `GET /enclave_identity` for
+/// debugging and is deliberately not repeated here.
 #[derive(Serialize, Deserialize)]
 pub struct ProveZoneBatchResponse {
-    /// The [`BatchOutput`] produced by the zone prover, as structured JSON.
-    /// Both signatures are over its canonical QOS JSON (`qos_json`)
-    /// encoding: verifiers re-serialize this value with `qos_json::to_vec`
-    /// to reconstruct the exact signed bytes.
-    pub batch_output: BatchOutput,
-    /// The quorum key's signature over the batch output.
+    /// Canonical QOS JSON (`qos_json`) encoding of the [`BatchOutput`]
+    /// produced by the zone prover. This is the only authoritative copy:
+    /// consumers that need the structured output parse exactly these
+    /// bytes. Re-serializing a parsed copy back to canonical QOS JSON
+    /// must round-trip to these bytes and can be used as a defensive
+    /// cross-check off chain.
     #[serde(with = "qos_hex::serde")]
-    pub quorum_key_signature: Vec<u8>,
-    /// The quorum signing public key.
+    pub batch_output: Vec<u8>,
+    /// Proof for verifiers that pin the deployment-wide quorum public key.
+    pub qk_proof: QuorumKeyProof,
+    /// Proof for verifiers that pin the manifest hash, via a boot proof
+    /// for the per-replica ephemeral key.
+    pub ek_proof: EphemeralKeyProof,
+    /// Proof for verifiers that pin the manifest hash and known-good PCR
+    /// values, via a per-request attestation doc binding the batch output.
+    pub nsm_proof: NsmProof,
+}
+
+/// QK model: the verifier pins the deployment-wide quorum public key and
+/// needs nothing else.
+#[derive(Serialize, Deserialize)]
+pub struct QuorumKeyProof {
+    /// The quorum key's signature over the `batch_output` bytes.
     #[serde(with = "qos_hex::serde")]
-    pub quorum_public_key: Vec<u8>,
-    /// The ephemeral key's signature over the batch output.
+    pub qk_sig: Vec<u8>,
+}
+
+/// EK model: the verifier pins the manifest hash. The boot proof is a
+/// standard QOS identity attestation doc (`user_data` == manifest hash,
+/// `public_key` == ephemeral key, PCR17 live manifest commitment):
+/// verifying it against the pinned manifest hash establishes the
+/// per-replica ephemeral key, which then verifies `ek_sig`. The boot
+/// proof only changes when a replica boots, so a verifier can check it
+/// once per replica and cache the ephemeral key.
+#[derive(Serialize, Deserialize)]
+pub struct EphemeralKeyProof {
+    /// Fresh QOS identity attestation doc establishing the ephemeral key.
     #[serde(with = "qos_hex::serde")]
-    pub ephemeral_key_signature: Vec<u8>,
-    /// The ephemeral signing public key.
+    pub bootproof_att_doc: Vec<u8>,
+    /// The ephemeral key's signature over the `batch_output` bytes.
     #[serde(with = "qos_hex::serde")]
-    pub ephemeral_public_key: Vec<u8>,
-    /// COSE Sign1 NSM attestation document binding the batch output: the
-    /// sha256 of the canonical QOS JSON batch output bytes in `user_data`.
-    /// The full batch output does not fit the NSM's `user_data` size
-    /// limit, so the binding is over its hash.
+    pub ek_sig: Vec<u8>,
+}
+
+/// Attestation-binding model: the verifier pins the manifest hash and
+/// known-good PCR values and checks a per-request attestation doc whose
+/// `user_data` binds the batch output.
+#[derive(Serialize, Deserialize)]
+pub struct NsmProof {
+    /// COSE Sign1 NSM attestation doc with `user_data ==
+    /// sha256(batch_output)`.
     #[serde(with = "qos_hex::serde")]
-    pub attestation_doc: Vec<u8>,
-    /// The QOS v2 manifest envelope loaded at server startup, as structured
-    /// JSON. Verifiers recompute the attested manifest hash from this value
-    /// with the canonical QOS JSON hash.
-    pub manifest: VersionedManifestEnvelope,
+    pub att_doc: Vec<u8>,
 }
 
 /// Decrypt the request's witness with the enclave's quorum key and run
@@ -68,51 +101,42 @@ fn decrypt_and_prove(
         .map_err(|e| AppError::bad_request(format!("invalid batch witness: {e}")))
 }
 
-/// Prove a zone batch: decrypt and prove the witness, sign the canonical
-/// QOS JSON batch output bytes with the quorum and ephemeral keys, and
-/// attach an NSM attestation doc binding `sha256(batch_output)` and
-/// committing to the QOS manifest.
+/// Prove a zone batch: decrypt and prove the witness, then attach the
+/// three independent proofs over the canonical QOS JSON batch output
+/// bytes — quorum key signature, ephemeral key signature plus boot proof,
+/// and an NSM attestation doc binding `sha256(batch_output)`.
 pub(crate) async fn prove_zone_batch(
     State(state): State<AppState>,
     Json(request): Json<ProveZoneBatchRequest>,
 ) -> Result<Json<ProveZoneBatchResponse>, AppError> {
     let output = decrypt_and_prove(&state, &request)?;
 
-    // Canonical QOS JSON: the signing payload. Verifiers recompute exactly
-    // these bytes by re-serializing the response's structured batch_output.
-    let signed_payload = qos_json::to_vec(&output)
+    // Canonical QOS JSON: the exact bytes every proof binds, sent verbatim
+    // in the response.
+    let batch_output = qos_json::to_vec(&output)
         .map_err(|e| AppError::internal(format!("failed to serialize batch output: {e}")))?;
-    let quorum_key_signature = state
+    let qk_sig = state
         .quorum_key
-        .sign(&signed_payload)
+        .sign(&batch_output)
         .map_err(|e| AppError::internal(format!("failed to sign with quorum key: {e:?}")))?;
-    let ephemeral_key_signature = state
+    let ek_sig = state
         .ephemeral_key
-        .sign(&signed_payload)
+        .sign(&batch_output)
         .map_err(|e| AppError::internal(format!("failed to sign with ephemeral key: {e:?}")))?;
-    let ephemeral_public_key = state.ephemeral_key.public_key().to_bytes();
 
-    // Bind the hash of the batch output: the NSM caps `user_data` at
-    // 512 bytes, so the full serialized batch output cannot be embedded.
-    let user_data = sha2::Sha256::digest(&signed_payload).to_vec();
-    let nsm_response = state.nsm.nsm_process_request(NsmRequest::Attestation {
-        user_data: Some(user_data),
-        nonce: None,
-        public_key: Some(ephemeral_public_key.clone()),
-    });
-    let NsmResponse::Attestation { document } = nsm_response else {
-        return Err(AppError::internal(format!(
-            "unexpected NSM response: {nsm_response:?}"
-        )));
-    };
+    // Boot proof: a standard QOS identity attestation doc committing to
+    // the manifest hash, establishing the ephemeral key for `ek_sig`.
+    let bootproof_att_doc = state.attestation_doc(state.manifest_hash().to_vec())?;
+    // Binding doc: bind the hash of the batch output.
+    let att_doc = state.attestation_doc(sha2::Sha256::digest(&batch_output).to_vec())?;
 
     Ok(Json(ProveZoneBatchResponse {
-        batch_output: output,
-        quorum_key_signature,
-        quorum_public_key: state.quorum_key.public_key().to_bytes(),
-        ephemeral_key_signature,
-        ephemeral_public_key,
-        attestation_doc: document,
-        manifest: state.manifest_envelope(),
+        batch_output,
+        qk_proof: QuorumKeyProof { qk_sig },
+        ek_proof: EphemeralKeyProof {
+            bootproof_att_doc,
+            ek_sig,
+        },
+        nsm_proof: NsmProof { att_doc },
     }))
 }

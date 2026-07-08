@@ -1,7 +1,9 @@
 //! Shared server state.
 
+use crate::response::AppError;
 use qos_core::protocol::services::boot::VersionedManifestEnvelope;
 use qos_nsm::NsmProvider;
+use qos_nsm::types::{NsmRequest, NsmResponse};
 use qos_p256::P256Pair;
 use std::sync::Arc;
 
@@ -42,5 +44,21 @@ impl AppState {
     /// docs (QOS convention) and committed to PCR17 by the NSM.
     pub(crate) fn manifest_hash(&self) -> [u8; 32] {
         self.manifest.manifest_hash()
+    }
+
+    /// Request a fresh NSM attestation doc with the given `user_data` and
+    /// the ephemeral public key in `public_key`.
+    pub(crate) fn attestation_doc(&self, user_data: Vec<u8>) -> Result<Vec<u8>, AppError> {
+        let nsm_response = self.nsm.nsm_process_request(NsmRequest::Attestation {
+            user_data: Some(user_data),
+            nonce: None,
+            public_key: Some(self.ephemeral_key.public_key().to_bytes()),
+        });
+        let NsmResponse::Attestation { document } = nsm_response else {
+            return Err(AppError::internal(format!(
+                "unexpected NSM response: {nsm_response:?}"
+            )));
+        };
+        Ok(document)
     }
 }

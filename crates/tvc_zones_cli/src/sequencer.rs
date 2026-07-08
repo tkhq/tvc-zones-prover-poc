@@ -22,14 +22,18 @@ use tempo_zones_stubs::fixtures::example_witness;
 use zones_prover::{EnclaveIdentityResponse, ProveZoneBatchRequest, ProveZoneBatchResponse};
 
 use crate::attest::verify_attestation_doc_root;
+use crate::onchain::PinnedValues;
 
 /// Emulate what the SEQUENCER does to submit a zone batch to the enclave.
-/// Returns the prove response for the on-chain verifier phase.
+/// Returns the prove response for the on-chain verifier phase, plus the
+/// values the on-chain verifier is assumed to have pinned (the CLI has no
+/// baked-in expected values, so it sources them from the independently
+/// verified enclave identity instead of the response under verification).
 pub async fn emulate_sequencer(
     client: &reqwest::Client,
     base_url: &str,
     unsafe_skip_root_verification: bool,
-) -> Result<ProveZoneBatchResponse, String> {
+) -> Result<(ProveZoneBatchResponse, PinnedValues), String> {
     // 1. Fetch the enclave identity.
     let identity_url = format!("{base_url}/enclave_identity");
     println!("\nsequencer step 1: GET {identity_url}");
@@ -40,7 +44,9 @@ pub async fn emulate_sequencer(
         .map_err(|e| format!("identity request failed: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("identity response does not decode as EnclaveIdentityResponse: {e}"))?;
+        .map_err(|e| {
+            format!("identity response does not decode as EnclaveIdentityResponse: {e}")
+        })?;
     println!("ok: decoded EnclaveIdentityResponse");
 
     // 2. Verify the identity attestation doc.
@@ -77,6 +83,10 @@ pub async fn emulate_sequencer(
     println!(
         "ok: user_data == manifest hash, PCR{LIVE_MANIFEST_COMMITMENT_PCR_INDEX} live manifest \
          commitment, manifest quorum key == identity quorum key"
+    );
+    println!(
+        "  pivot (app) hash: {} (compare against a known-good reproducible build)",
+        qos_hex::encode(&envelope.manifest.pivot.hash)
     );
 
     // 3. Extract the quorum key from the attested manifest.
@@ -120,7 +130,21 @@ pub async fn emulate_sequencer(
     println!("ok: HTTP {status}");
     let response: ProveZoneBatchResponse = serde_json::from_str(&body)
         .map_err(|e| format!("response does not decode as ProveZoneBatchResponse: {e}"))?;
-    println!("ok: decoded ProveZoneBatchResponse (verification happens in the on-chain verifier phase)");
+    println!(
+        "ok: decoded ProveZoneBatchResponse (verification happens in the on-chain verifier phase)"
+    );
 
-    Ok(response)
+    Ok((
+        response,
+        PinnedValues {
+            quorum_public_key: attested_quorum_key,
+            manifest_hash,
+            pcrs: [
+                envelope.manifest.enclave.pcr0.clone(),
+                envelope.manifest.enclave.pcr1.clone(),
+                envelope.manifest.enclave.pcr2.clone(),
+                envelope.manifest.enclave.pcr3.clone(),
+            ],
+        },
+    ))
 }

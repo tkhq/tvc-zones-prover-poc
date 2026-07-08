@@ -157,18 +157,17 @@ tvc_zones_cli --url https://<your-app-public-url>
 
 Phase 1 (**sequencer**) fetches `/enclave_identity`, verifies the identity
 attestation document against the AWS Nitro root, extracts the quorum key
-from the attested manifest, encrypts a fake `BatchWitness` to it, submits
-it to `/prove_zone_batch`, and verifies the response signatures: the quorum
-key against the attested manifest and the ephemeral key via the response's
-own attestation document.
+from the attested manifest, encrypts a fake `BatchWitness` to it, and
+submits it to `/prove_zone_batch`. It also prints the manifest's pivot
+(app) hash — which should equal the **Expected Executable Digest** from
+step 4b's CI output for a correctly deployed app.
 
-Phase 2 (**on-chain verifier**) then verifies the prove response the way a
-verifier contract / precompile would: attestation doc decode, the
-attestation binding (`user_data == sha256(batch_output)`), certificate
-chain, PCR0-3, the PCR17
-manifest commitment, manifest decode + cross-checks, and the pivot hash —
-which should equal the **Expected Executable Digest** from step 4b's CI
-output for a correctly deployed app.
+Phase 2 (**on-chain verifier**) then verifies each of the prove response's
+three independent proofs over the batch output bytes, the way a verifier
+contract / precompile would with pinned values: the quorum key signature
+(pinned quorum key), the boot proof plus ephemeral key signature (pinned
+manifest hash), and the attestation binding
+(`user_data == sha256(batch_output)`, pinned manifest hash + PCRs).
 
 Expected final output: `all checks passed`.
 

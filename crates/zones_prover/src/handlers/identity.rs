@@ -11,11 +11,12 @@ pub struct EnclaveIdentityResponse {
     /// JSON. Verifiers recompute the attested manifest hash from this value
     /// with the canonical QOS JSON hash.
     pub manifest: VersionedManifestEnvelope,
-    /// The quorum signing public key.
+    /// The quorum signing public key. Callers encrypt request payloads to
+    /// this key after verifying it against the attested manifest.
     #[serde(with = "qos_hex::serde")]
     pub quorum_public_key: Vec<u8>,
-    /// The ephemeral public key. Callers encrypt request payloads to this
-    /// key after verifying it via the attestation doc.
+    /// The per-instance ephemeral public key, bound to the enclave via the
+    /// attestation doc's `public_key` field.
     #[serde(with = "qos_hex::serde")]
     pub ephemeral_public_key: Vec<u8>,
     /// Fresh COSE Sign1 NSM attestation document with the canonical QOS

@@ -45,29 +45,33 @@ export TVC_API_KEY_PRIVATE=<hex P256 private key>
 export TVC_NON_INTERACTIVE=true   # fail fast instead of prompting
 ```
 
-## 3. Clone this repo and build the verification CLI
+## 3. Clone this repo and install the verification CLI
+
+Install `tvc_zones_cli` globally so it can be run from anywhere:
 
 ```sh
 git clone https://github.com/tkhq/tvc-zones-prover-poc.git
 cd tvc-zones-prover-poc
-cargo build --bin tvc_zones_cli
+cargo install --path crates/tvc_zones_cli
 ```
 
 ## 4. Create the app and deployment
 
 ### 4a. App create
 
-Generate a quorum key setup and app config, then create the app.
-`tvc app create` requires a config file; generate the template with
-`tvc app init` and fill it (interactively, or by editing the JSON):
+`tvc app create` requires a config file, but no hand-editing is needed:
+`tvc app init` pre-fills the quorum public key and operator key from your
+local CLI state, leaving only the name placeholders. Patch those with `jq`
+and pipe the result straight into `app create` via process substitution —
+no persistent config file:
 
 ```sh
-# Generate + shamir-split a quorum key (see `tvc keys generate-quorum-key --help`),
-# or start from the app template and fill in an existing quorum public key:
-tvc app init --name zones-prover-demo --output zones-prover-app.json
-# edit zones-prover-app.json: quorumPublicKey, manifest/share set operators, ...
-
-tvc app create --config-file zones-prover-app.json
+tvc app init --non-interactive --output /tmp/app-template.json
+tvc app create --non-interactive --config-file <(
+  jq '.name="zones-prover-demo" | .manifestSetParams.name="zones-prover-demo-manifest-set"' \
+    /tmp/app-template.json
+)
+rm /tmp/app-template.json
 ```
 
 Record from the output:
@@ -77,52 +81,60 @@ Record from the output:
 
 ### 4b. Deployment create — pure CLI args, no config file
 
-`tvc deploy create` supports flag-only operation. The container image URL and
-expected pivot digest come from this repo's **stagex CI** ("Build
-zones_prover image" job): every run of the `stagex` workflow on
-[PR #1](https://github.com/tkhq/tvc-zones-prover-poc/pull/1) prints a
-**TVC Deployment Details** block (also in the run's step summary) with the
-exact values.
-
-Known-good values from the latest successful stagex run at the time of
-writing (workflow run
-[`28908023492`](https://github.com/tkhq/tvc-zones-prover-poc/actions/runs/28908023492),
-commit `7250621`):
+`tvc deploy create` supports flag-only operation. Use the **latest
+successful `stagex` workflow run on `main`**: every run's "Build
+zones_prover image" job prints a **TVC Deployment Details** block (also in
+the run's step summary) with the container image URL and expected pivot
+digest. Fetch them like so:
 
 ```sh
-export TVC_PIVOT_IMAGE_URL='ghcr.io/tkhq/zones_prover:pr-1@sha256:71251137bc36c1570280d478bdfd0634b4e91d094f0e13260d8bb2205a91dae5'
-export TVC_EXPECTED_PIVOT_DIGEST='e0246e3943de810e7297e530af6a039eccb387e9359731f374321556760c56f7'
+gh run list -R tkhq/tvc-zones-prover-poc -w stagex -b main --json databaseId,conclusion
+gh run view <id> -R tkhq/tvc-zones-prover-poc --log | grep -A3 'TVC Deployment Details'
 ```
 
-> To refresh these for a newer commit: open the PR's latest successful
-> `stagex` workflow run on GitHub Actions and copy the values from the
-> **TVC Deployment Details** step summary, or via the API:
-> `gh run list -R tkhq/tvc-zones-prover-poc -w stagex -b <branch> --json databaseId,conclusion`
-> then `gh run view <id> -R tkhq/tvc-zones-prover-poc --log | grep -A3 'TVC Deployment Details'`.
+Example values from the latest successful main run at the time of writing
+(workflow run
+[`28911538632`](https://github.com/tkhq/tvc-zones-prover-poc/actions/runs/28911538632),
+commit `3b4541f`):
+
+```sh
+export TVC_PIVOT_IMAGE_URL='ghcr.io/tkhq/zones_prover:main@sha256:15fb6c54ed1bc0acaab81f62eae7009906129c7acbb45b4facf68349b53d8586'
+export TVC_EXPECTED_PIVOT_DIGEST='17f55247f42b177d847c84cd08aa54b770171b637d6d9035bc31ace1c76fafa4'
+```
+
+> The `ghcr.io/tkhq/zones_prover` package must be **public** (or you must
+> pass `--pivot-pull-secret`): Turnkey's backend pulls the image itself and
+> fails deployment creation with `TVC_IMAGE_VALIDATION_FAILED` if it can't.
 
 Create the deployment (ports: the server listens on 3000 by default, and
-`/health` is served on the same listener):
+`/health` is served on the same listener). Note the `=` in
+`--pivot-args=...` — the value starts with `--`, so the space-separated
+form does not parse — and that the QOS version has no `v` prefix:
 
 ```sh
 tvc deploy create \
   --app-id "$TVC_APP_ID" \
-  --qos-version v0.12.0 \
+  --qos-version 0.12.0 \
   --pivot-image-url "$TVC_PIVOT_IMAGE_URL" \
   --pivot-path /tvc_app \
   --expected-pivot-digest "$TVC_EXPECTED_PIVOT_DIGEST" \
-  --pivot-args '--host,0.0.0.0,--port,3000' \
+  --pivot-args='--host,0.0.0.0,--port,3000' \
   --health-check-port 3000 \
   --public-ingress-port 3000 \
   --non-interactive
 ```
 
 Record the **Deployment ID**, then approve the deployment manifest as an
-operator:
+operator. Interactively the CLI walks you through reviewing the manifest;
+non-interactively (CI/agents) you must explicitly acknowledge skipping that
+review with `--dangerous-skip-interactive`:
 
 ```sh
 tvc deploy approve \
   --deploy-id <DEPLOYMENT_UUID> \
-  --operator-id <OPERATOR_UUID>   # from the app create output
+  --operator-id <OPERATOR_UUID> \
+  --non-interactive --dangerous-skip-interactive
+# operator ID comes from the app create output
 ```
 
 ## 5. Wait for the app to be ready
@@ -131,25 +143,30 @@ tvc deploy approve \
 # Deployment status (manifest approval / provisioning progress):
 tvc deploy status --deploy-id <DEPLOYMENT_UUID>
 
-# Live runtime status from the cluster (ready / health):
+# Live runtime status from the cluster (healthy/desired replica counts):
 tvc app status --app-id "$TVC_APP_ID"
 ```
 
-Repeat until the app reports ready and note the app's public URL.
+Repeat until `tvc app status` reports all replicas healthy (e.g.
+`Healthy / Desired Replicas: 3/3`). The app's public URL is shown as
+`Public Domain` in `tvc app list` (on dev it follows the pattern
+`app-<APP_ID>.tvc.dev.turnkey.engineering`).
 
 ## 6. Verify end to end with tvc_zones_cli
 
-Run the two-phase verification against the live deployment:
+Run the two-phase verification against the live deployment (the CLI was
+installed globally in step 3):
 
 ```sh
-./target/debug/tvc_zones_cli --url https://<your-app-public-url>
+tvc_zones_cli --url https://<your-app-public-url>
 ```
 
 Phase 1 (**sequencer**) fetches `/enclave_identity`, verifies the identity
-attestation document against the AWS Nitro root, extracts the ephemeral key
-from the attestation document, encrypts a fake `BatchWitness` to it, submits
-it to `/prove_zone_batch`, and checks the response signatures against the
-attested identity.
+attestation document against the AWS Nitro root, extracts the quorum key
+from the attested manifest, encrypts a fake `BatchWitness` to it, submits
+it to `/prove_zone_batch`, and verifies the response signatures: the quorum
+key against the attested manifest and the ephemeral key via the response's
+own attestation document.
 
 Phase 2 (**on-chain verifier**) then verifies the prove response the way a
 verifier contract / precompile would: attestation doc decode,
